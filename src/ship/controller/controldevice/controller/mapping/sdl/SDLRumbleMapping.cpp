@@ -25,6 +25,11 @@ void SDLRumbleMapping::StartRumble() {
     jobject activity = (jobject)SDL_AndroidGetActivity();
     jclass cls = env->GetObjectClass(activity);
     jmethodID m = env->GetMethodID(cls, "startRumble", "(II)V");
+    if (m == nullptr) {
+        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+        return;
+    }
     env->CallVoidMethod(activity, m, (jint)mLowFrequencyIntensityPercentage, (jint)mHighFrequencyIntensityPercentage);
     env->DeleteLocalRef(cls);
     env->DeleteLocalRef(activity);
@@ -43,6 +48,11 @@ void SDLRumbleMapping::StopRumble() {
     jobject activity = (jobject)SDL_AndroidGetActivity();
     jclass cls = env->GetObjectClass(activity);
     jmethodID m = env->GetMethodID(cls, "stopRumble", "()V");
+    if (m == nullptr) {
+        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+        return;
+    }
     env->CallVoidMethod(activity, m);
     env->DeleteLocalRef(cls);
     env->DeleteLocalRef(activity);

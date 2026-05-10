@@ -55,7 +55,7 @@ extern "C" void JNICALL Java_com_dishii_soh_MainActivity_attachController(JNIEnv
     char guidStr[33];
     SDL_JoystickGetGUIDString(guid, guidStr, sizeof(guidStr));
     char mappingStr[512];
-    SDL_snprintf(mappingStr, sizeof(mappingStr),
+    int written = SDL_snprintf(mappingStr, sizeof(mappingStr),
         "%s,Touch Overlay,"
         "a:b0,b:b1,x:b2,y:b3,back:b4,guide:b5,start:b6,"
         "leftstick:b7,rightstick:b8,leftshoulder:b9,rightshoulder:b10,"
@@ -63,6 +63,10 @@ extern "C" void JNICALL Java_com_dishii_soh_MainActivity_attachController(JNIEnv
         "leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:a4,righttrigger:a5,"
         "platform:Android,",
         guidStr);
+    if (written >= (int)sizeof(mappingStr)) {
+        SDL_Log("Touch Overlay mapping string truncated; skipping SDL_GameControllerAddMapping");
+        return;
+    }
     SDL_GameControllerAddMapping(mappingStr);
     virtual_joystick = SDL_JoystickOpen(virtual_joystick_id);
     if (virtual_joystick == nullptr)
