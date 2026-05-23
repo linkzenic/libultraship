@@ -211,7 +211,15 @@ std::shared_ptr<File> Archive::LoadFile(const std::string& filePath, std::shared
 
         if (metaFileToLoad != nullptr) {
             auto initDataFromMetaFile = ReadResourceInitData(filePath, metaFileToLoad);
-            fileToLoad = LoadFileRaw(initDataFromMetaFile->Path);
+            if (filePath.starts_with("alt/")) {
+                fileToLoad = LoadFileRaw(filePath);
+            } else {
+                fileToLoad = LoadFileRaw(initDataFromMetaFile->Path);
+            }
+            if (fileToLoad == nullptr) {
+                SPDLOG_ERROR("Failed to load file at path {}.", filePath);
+                return nullptr;
+            }
             fileToLoad->InitData = initDataFromMetaFile;
         } else {
             fileToLoad = LoadFileRaw(filePath);
