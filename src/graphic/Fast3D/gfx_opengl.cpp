@@ -475,6 +475,16 @@ static struct ShaderProgram* gfx_opengl_create_and_load_new_shader(uint64_t shad
         append_line(fs_buf, &fs_len, "}");
     }
 
+    append_line(fs_buf, &fs_len, "vec4 hookAuxTexture2D(in sampler2D tex, in vec2 uv, in vec2 texSize) {");
+#if defined(__ANDROID__) && defined(USE_OPENGLES)
+    append_line(fs_buf, &fs_len, "    return texture(tex, uv);");
+#elif defined(__ANDROID__)
+    append_line(fs_buf, &fs_len, "    return texture2D(tex, uv);");
+#else
+    append_line(fs_buf, &fs_len, "    return hookTexture2D(tex, uv, texSize);");
+#endif
+    append_line(fs_buf, &fs_len, "}");
+
 #if defined(__APPLE__) || defined(USE_OPENGLES)
     append_line(fs_buf, &fs_len, "out vec4 outColor;");
 #endif
@@ -534,10 +544,11 @@ static struct ShaderProgram* gfx_opengl_create_and_load_new_shader(uint64_t shad
 #endif
                 fs_len +=
                     sprintf(fs_buf + fs_len,
-                            "vec4 maskVal%d = hookTexture2D(uTexMask%d, vTexCoordAdj%d, maskSize%d);\n", i, i, i, i);
+                            "vec4 maskVal%d = hookAuxTexture2D(uTexMask%d, vTexCoordAdj%d, maskSize%d);\n", i, i, i,
+                            i);
                 if (cc_features.used_blend[i]) {
                     fs_len += sprintf(fs_buf + fs_len,
-                                      "vec4 blendVal%d = hookTexture2D(uTexBlend%d, vTexCoordAdj%d, texSize%d);\n", i,
+                                      "vec4 blendVal%d = hookAuxTexture2D(uTexBlend%d, vTexCoordAdj%d, texSize%d);\n", i,
                                       i, i, i);
                 } else {
                     fs_len += sprintf(fs_buf + fs_len, "vec4 blendVal%d = vec4(0, 0, 0, 0);\n", i);
