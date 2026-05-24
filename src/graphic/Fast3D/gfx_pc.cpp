@@ -67,7 +67,11 @@ using namespace std;
 #define RATIO_Y \
     ((fbActive ? active_fb->second.applied_height : gfx_current_dimensions.height) / (2.0f * HALF_SCREEN_HEIGHT))
 
+#ifdef __ANDROID__
+#define TEXTURE_CACHE_MAX_SIZE 2000
+#else
 #define TEXTURE_CACHE_MAX_SIZE 500
+#endif
 
 static struct {
     TextureCacheMap map;
