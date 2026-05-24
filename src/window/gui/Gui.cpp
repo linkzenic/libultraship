@@ -2,6 +2,8 @@
 
 #include "Gui.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <utility>
 #include <string>
@@ -56,6 +58,27 @@ namespace Ship {
 
 #define TOGGLE_BTN ImGuiKey_F1
 #define TOGGLE_PAD_BTN ImGuiKey_GamepadBack
+
+#if defined(__ANDROID__)
+static float GetDefaultAndroidMenuScale(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) {
+        return 2.0f;
+    }
+
+    const uint32_t shortEdge = std::min(width, height);
+    const float aspect = static_cast<float>(std::max(width, height)) / static_cast<float>(shortEdge);
+
+    if (shortEdge <= 720) {
+        return 1.25f;
+    }
+
+    if (aspect <= 1.45f || shortEdge <= 960) {
+        return 1.45f;
+    }
+
+    return 2.0f;
+}
+#endif
 
 Gui::Gui(std::vector<std::shared_ptr<GuiWindow>> guiWindows) : mNeedsConsoleVariableSave(false) {
     mGameOverlay = std::make_shared<GameOverlay>();
@@ -123,7 +146,17 @@ void Gui::Init(GuiWindowInitData windowImpl) {
                                                           &iconsConfig, sIconsRanges);
 
 #if defined(__ANDROID__)
-    float androidMenuScale = CVarGetFloat("gSettings.Menu.AndroidScale", 2.0f);
+    const auto window = Context::GetInstance()->GetWindow();
+    const float defaultAndroidMenuScale =
+        GetDefaultAndroidMenuScale(window != nullptr ? window->GetWidth() : 0, window != nullptr ? window->GetHeight() : 0);
+    float androidMenuScale = CVarGetFloat("gSettings.Menu.AndroidScale", defaultAndroidMenuScale);
+    if (!CVarGet("gSettings.Menu.AndroidScaleAutoMigrated") && std::fabs(androidMenuScale - 2.0f) < 0.001f &&
+        std::fabs(defaultAndroidMenuScale - 2.0f) >= 0.001f) {
+        androidMenuScale = defaultAndroidMenuScale;
+        CVarSetFloat("gSettings.Menu.AndroidScale", androidMenuScale);
+        CVarSetInteger("gSettings.Menu.AndroidScaleAutoMigrated", 1);
+        CVarSave();
+    }
     if (androidMenuScale < 1.0f) {
         androidMenuScale = 1.0f;
     } else if (androidMenuScale > 3.0f) {
