@@ -127,6 +127,10 @@ void Config::SetUInt(const std::string& key, uint32_t value) {
     mFlattenedJson[FormatNestedKey(key)] = value;
 }
 
+void Config::SetBlock(const std::string& key, nlohmann::json value) {
+    mFlattenedJson[FormatNestedKey(key)] = value;
+}
+
 void Config::Erase(const std::string& key) {
     mFlattenedJson.erase(FormatNestedKey(key));
 }

@@ -55,6 +55,7 @@ class Config {
     void SetBool(const std::string& key, bool value);
     void SetInt(const std::string& key, int32_t value);
     void SetUInt(const std::string& key, uint32_t value);
+    void SetBlock(const std::string& key, nlohmann::json value);
     void Erase(const std::string& key);
     void EraseBlock(const std::string& key);
     void Copy(const std::string& fromKey, const std::string& toKey);

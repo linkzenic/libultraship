@@ -70,7 +70,14 @@ endif()
 
 #=================== STB ===================
 set(STB_DIR ${CMAKE_BINARY_DIR}/_deps/stb)
-file(DOWNLOAD "https://github.com/nothings/stb/raw/0bc88af4de5fb022db643c2d8e549a0927749354/stb_image.h" "${STB_DIR}/stb_image.h")
+if(EXISTS "${STB_DIR}/stb_image.h")
+    file(SIZE "${STB_DIR}/stb_image.h" STB_IMAGE_SIZE)
+else()
+    set(STB_IMAGE_SIZE 0)
+endif()
+if(STB_IMAGE_SIZE EQUAL 0)
+    file(DOWNLOAD "https://github.com/nothings/stb/raw/0bc88af4de5fb022db643c2d8e549a0927749354/stb_image.h" "${STB_DIR}/stb_image.h")
+endif()
 file(WRITE "${STB_DIR}/stb_impl.c" "#define STB_IMAGE_IMPLEMENTATION\n#include \"stb_image.h\"")
 
 add_library(stb STATIC)
