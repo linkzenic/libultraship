@@ -163,6 +163,10 @@ ButtonMappingFactory::CreateDefaultSDLButtonMappings(ShipDeviceIndex shipDeviceI
         case BTN_R:
             mappings.push_back(std::make_shared<SDLAxisDirectionToButtonMapping>(shipDeviceIndex, portIndex, BTN_R,
                                                                                  SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 1));
+#ifdef __ANDROID__
+            mappings.push_back(std::make_shared<SDLButtonToButtonMapping>(shipDeviceIndex, portIndex, BTN_R,
+                                                                          SDL_CONTROLLER_BUTTON_RIGHTSHOULDER));
+#endif
             break;
         case BTN_Z:
             mappings.push_back(std::make_shared<SDLAxisDirectionToButtonMapping>(shipDeviceIndex, portIndex, BTN_Z,
