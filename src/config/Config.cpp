@@ -183,8 +183,38 @@ void Config::Reload() {
 }
 
 void Config::Save() {
-    std::ofstream file(mPath);
-    file << mFlattenedJson.unflatten().dump(4);
+    const fs::path path(mPath);
+    const fs::path tempPath = path.string() + ".tmp";
+    mNestedJson = mFlattenedJson.unflatten();
+
+    {
+        std::ofstream file(tempPath);
+        if (!file.is_open()) {
+            SPDLOG_ERROR("Failed to open temporary config file for writing: {}", tempPath.string());
+            return;
+        }
+
+        file << mNestedJson.dump(4);
+        file.flush();
+
+        if (!file.good()) {
+            SPDLOG_ERROR("Failed to write temporary config file: {}", tempPath.string());
+            return;
+        }
+    }
+
+    std::error_code error;
+    fs::rename(tempPath, path, error);
+    if (error) {
+        fs::remove(path, error);
+        error.clear();
+        fs::rename(tempPath, path, error);
+    }
+
+    if (error) {
+        SPDLOG_ERROR("Failed to replace config file {} with {}: {}", path.string(), tempPath.string(),
+                     error.message());
+    }
 }
 
 template <typename T> std::vector<T> Config::GetArray(const std::string& key) {
