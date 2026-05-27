@@ -15,6 +15,20 @@
 namespace fs = std::filesystem;
 
 namespace Ship {
+static nlohmann::json BuildNestedJsonFromFlattened(const nlohmann::json& flattenedJson) {
+    nlohmann::json nestedJson = nlohmann::json::object();
+
+    if (!flattenedJson.is_object()) {
+        return flattenedJson;
+    }
+
+    for (auto& [key, value] : flattenedJson.items()) {
+        nestedJson[nlohmann::json::json_pointer(key)] = value;
+    }
+
+    return nestedJson;
+}
+
 Config::Config(std::string path) : mPath(std::move(path)), mIsNewInstance(false) {
     Reload();
 }
@@ -44,7 +58,7 @@ nlohmann::json Config::Nested(const std::string& key) {
         return mFlattenedJson;
     }
 
-    nlohmann::json gjson = mFlattenedJson.unflatten();
+    nlohmann::json gjson = BuildNestedJsonFromFlattened(mFlattenedJson);
 
     if (dots.size() > 1) {
         for (auto& dot : dots) {
@@ -129,7 +143,7 @@ void Config::SetUInt(const std::string& key, uint32_t value) {
 
 void Config::SetBlock(const std::string& key, nlohmann::json value) {
     mFlattenedJson[FormatNestedKey(key)] = value;
-    mNestedJson = mFlattenedJson.unflatten();
+    mNestedJson = BuildNestedJsonFromFlattened(mFlattenedJson);
 }
 
 void Config::Erase(const std::string& key) {
@@ -137,7 +151,7 @@ void Config::Erase(const std::string& key) {
 }
 
 void Config::EraseBlock(const std::string& key) {
-    nlohmann::json gjson = mFlattenedJson.unflatten();
+    nlohmann::json gjson = BuildNestedJsonFromFlattened(mFlattenedJson);
     if (key.find(".") != std::string::npos) {
         nlohmann::json& gjson2 = gjson;
         std::vector<std::string> dots = StringHelper::Split(key, ".");
@@ -186,7 +200,7 @@ void Config::Reload() {
 void Config::Save() {
     const fs::path path(mPath);
     const fs::path tempPath = path.string() + ".tmp";
-    mNestedJson = mFlattenedJson.unflatten();
+    mNestedJson = BuildNestedJsonFromFlattened(mFlattenedJson);
 
     {
         std::ofstream file(tempPath);
