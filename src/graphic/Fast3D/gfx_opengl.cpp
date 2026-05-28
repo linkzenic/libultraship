@@ -7,6 +7,7 @@
 
 #include <map>
 #include <unordered_map>
+#include <vector>
 
 #ifndef _LANGUAGE_C
 #define _LANGUAGE_C
@@ -1173,7 +1174,23 @@ void gfx_opengl_read_framebuffer_to_cpu(int fb_id, uint32_t width, uint32_t heig
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffers[fb_id].fbo);
+#ifdef USE_OPENGLES
+    // Some GLES drivers do not reliably support reading RGBA5551 directly from
+    // an RGBA framebuffer. Read RGBA8 and pack to RGBA16 so CPU-side consumers
+    // like the pictograph capture get valid pixel data on Android.
+    std::vector<uint8_t> rgba8Buf(width * height * 4);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba8Buf.data());
+
+    for (size_t i = 0; i < (size_t)width * height; i++) {
+        uint8_t r = rgba8Buf[i * 4 + 0] >> 3;
+        uint8_t g = rgba8Buf[i * 4 + 1] >> 3;
+        uint8_t b = rgba8Buf[i * 4 + 2] >> 3;
+        uint8_t a = rgba8Buf[i * 4 + 3] >= 0x80 ? 1 : 0;
+        rgba16_buf[i] = (r << 11) | (g << 6) | (b << 1) | a;
+    }
+#else
     glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, (void*)rgba16_buf);
+#endif
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffers[current_framebuffer].fbo);
 }
 
