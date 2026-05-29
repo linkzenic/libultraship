@@ -1087,7 +1087,7 @@ void gfx_opengl_resolve_msaa_color_buffer(int fb_id_target, int fb_id_source) {
 
     glBlitFramebuffer(0, 0, fb_src.width, fb_src.height, 0, 0, fb_dst.width, fb_dst.height, GL_COLOR_BUFFER_BIT,
                       GL_NEAREST);
-    glBindFramebuffer(GL_FRAMEBUFFER, current_framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffers[current_framebuffer].fbo);
 
     glEnable(GL_SCISSOR_TEST);
 }
@@ -1128,7 +1128,7 @@ void gfx_opengl_copy_framebuffer(int fb_dst_id, int fb_src_id, int srcX0, int sr
 
     // For msaa enabled buffers we can't perform a scaled blit to a simple sample buffer
     // First do an unscaled blit to a msaa resolved buffer
-    if (src.height != dst.height && src.width != dst.width && src.msaa_level > 1) {
+    if ((src.height != dst.height || src.width != dst.width) && src.msaa_level > 1) {
         // Start with the main buffer (0) as the msaa resolved buffer
         int fb_resolve_id = 0;
         Framebuffer fb_resolve = framebuffers[fb_resolve_id];
@@ -1163,7 +1163,7 @@ void gfx_opengl_copy_framebuffer(int fb_dst_id, int fb_src_id, int srcX0, int sr
 
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffers[current_framebuffer].fbo);
 
-    glReadBuffer(GL_BACK);
+    glReadBuffer(current_framebuffer == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0);
 
     glEnable(GL_SCISSOR_TEST);
 }
