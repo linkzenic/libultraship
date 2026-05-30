@@ -113,7 +113,7 @@ struct XYWidthHeight gfx_native_dimensions;
 struct XYWidthHeight gfx_prev_native_dimensions;
 
 static bool game_renders_to_framebuffer;
-static bool game_framebuffer_blits_to_window;
+static bool game_framebuffer_forced;
 static int game_framebuffer;
 static int game_framebuffer_msaa_resolved;
 
@@ -1829,7 +1829,7 @@ static void gfx_adjust_viewport_or_scissor(XYWidthHeight* area) {
 
         if (!game_renders_to_framebuffer ||
             (gfx_msaa_level > 1 && gfx_current_dimensions.width == gfx_current_game_window_viewport.width &&
-             gfx_current_dimensions.height == gfx_current_game_window_viewport.height)) {
+             gfx_current_dimensions.height == gfx_current_game_window_viewport.height && !game_framebuffer_forced)) {
             area->x += gfx_current_game_window_viewport.x;
             area->y += gfx_current_window_dimensions.height -
                        (gfx_current_game_window_viewport.y + gfx_current_game_window_viewport.height);
@@ -4112,7 +4112,7 @@ void gfx_start_frame(void) {
 #else
     bool force_game_framebuffer = false;
 #endif
-    game_framebuffer_blits_to_window = force_game_framebuffer && !different_size && gfx_msaa_level <= 1;
+    game_framebuffer_forced = force_game_framebuffer;
     if (different_size || force_game_framebuffer || gfx_msaa_level > 1) {
         game_renders_to_framebuffer = true;
         if (different_size || force_game_framebuffer) {
@@ -4126,7 +4126,7 @@ void gfx_start_frame(void) {
                                                     gfx_current_window_dimensions.height, gfx_msaa_level, false, true,
                                                     true, true);
         }
-        if (gfx_msaa_level > 1 && different_size) {
+        if (gfx_msaa_level > 1 && (different_size || force_game_framebuffer)) {
             gfx_rapi->update_framebuffer_parameters(game_framebuffer_msaa_resolved, gfx_current_dimensions.width,
                                                     gfx_current_dimensions.height, 1, false, false, false, false);
         }
@@ -4202,7 +4202,7 @@ void gfx_run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_replacemen
             bool different_size = gfx_current_dimensions.width != gfx_current_game_window_viewport.width ||
                                   gfx_current_dimensions.height != gfx_current_game_window_viewport.height;
 
-            if (different_size) {
+            if (different_size || game_framebuffer_forced) {
                 gfx_rapi->resolve_msaa_color_buffer(game_framebuffer_msaa_resolved, game_framebuffer);
                 gfxFramebuffer = (uintptr_t)gfx_rapi->get_framebuffer_texture_id(game_framebuffer_msaa_resolved);
             } else {
@@ -4212,14 +4212,6 @@ void gfx_run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_replacemen
             gfxFramebuffer = (uintptr_t)gfx_rapi->get_framebuffer_texture_id(game_framebuffer);
         }
 
-        if (game_framebuffer_blits_to_window) {
-            gfxFramebuffer = 0;
-            gfx_rapi->copy_framebuffer(0, game_framebuffer, 0, 0, gfx_current_dimensions.width,
-                                       gfx_current_dimensions.height, gfx_current_game_window_viewport.x,
-                                       gfx_current_game_window_viewport.y,
-                                       gfx_current_game_window_viewport.x + gfx_current_game_window_viewport.width,
-                                       gfx_current_game_window_viewport.y + gfx_current_game_window_viewport.height);
-        }
     } else if (fbActive) {
         // Failsafe reset to main framebuffer to prevent softlocking the renderer
         fbActive = 0;
@@ -4292,7 +4284,7 @@ void gfx_copy_framebuffer(int fb_dst_id, int fb_src_id, bool copyOnce, bool* has
     // then the source coordinates must account for any docked ImGui elements
     if (fb_src_id == 0 ||
         (gfx_msaa_level > 1 && gfx_current_dimensions.width == gfx_current_game_window_viewport.width &&
-         gfx_current_dimensions.height == gfx_current_game_window_viewport.height)) {
+         gfx_current_dimensions.height == gfx_current_game_window_viewport.height && !game_framebuffer_forced)) {
         srcX0 = gfx_current_game_window_viewport.x;
         srcY0 = gfx_current_game_window_viewport.y;
         srcX1 = gfx_current_game_window_viewport.x + gfx_current_game_window_viewport.width;
@@ -4327,7 +4319,7 @@ static void adjust_pixel_depth_coordinates(float& x, float& y) {
     y *= RATIO_Y;
     if (!game_renders_to_framebuffer ||
         (gfx_msaa_level > 1 && gfx_current_dimensions.width == gfx_current_game_window_viewport.width &&
-         gfx_current_dimensions.height == gfx_current_game_window_viewport.height)) {
+         gfx_current_dimensions.height == gfx_current_game_window_viewport.height && !game_framebuffer_forced)) {
         x += gfx_current_game_window_viewport.x;
         y += gfx_current_window_dimensions.height -
              (gfx_current_game_window_viewport.y + gfx_current_game_window_viewport.height);
