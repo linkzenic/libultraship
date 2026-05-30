@@ -4103,9 +4103,17 @@ void gfx_start_frame(void) {
 
     bool different_size = gfx_current_dimensions.width != gfx_current_game_window_viewport.width ||
                           gfx_current_dimensions.height != gfx_current_game_window_viewport.height;
-    if (different_size || gfx_msaa_level > 1) {
+#ifdef USE_OPENGLES
+    // Android/GLES devices can return black data when framebuffer effects copy from the default window buffer.
+    // Keep the game in an offscreen framebuffer even at 100% internal resolution so pause and photo captures use the
+    // same reliable path as scaled internal resolutions.
+    bool force_game_framebuffer = true;
+#else
+    bool force_game_framebuffer = false;
+#endif
+    if (different_size || force_game_framebuffer || gfx_msaa_level > 1) {
         game_renders_to_framebuffer = true;
-        if (different_size) {
+        if (different_size || force_game_framebuffer) {
             gfx_rapi->update_framebuffer_parameters(game_framebuffer, gfx_current_dimensions.width,
                                                     gfx_current_dimensions.height, gfx_msaa_level, true, true, true,
                                                     true);
