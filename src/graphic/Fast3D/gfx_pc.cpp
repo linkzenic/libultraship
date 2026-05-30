@@ -113,6 +113,7 @@ struct XYWidthHeight gfx_native_dimensions;
 struct XYWidthHeight gfx_prev_native_dimensions;
 
 static bool game_renders_to_framebuffer;
+static bool game_framebuffer_blits_to_window;
 static int game_framebuffer;
 static int game_framebuffer_msaa_resolved;
 
@@ -4111,6 +4112,7 @@ void gfx_start_frame(void) {
 #else
     bool force_game_framebuffer = false;
 #endif
+    game_framebuffer_blits_to_window = force_game_framebuffer && !different_size && gfx_msaa_level <= 1;
     if (different_size || force_game_framebuffer || gfx_msaa_level > 1) {
         game_renders_to_framebuffer = true;
         if (different_size || force_game_framebuffer) {
@@ -4208,6 +4210,15 @@ void gfx_run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_replacemen
             }
         } else {
             gfxFramebuffer = (uintptr_t)gfx_rapi->get_framebuffer_texture_id(game_framebuffer);
+        }
+
+        if (game_framebuffer_blits_to_window) {
+            gfxFramebuffer = 0;
+            gfx_rapi->copy_framebuffer(0, game_framebuffer, 0, 0, gfx_current_dimensions.width,
+                                       gfx_current_dimensions.height, gfx_current_game_window_viewport.x,
+                                       gfx_current_game_window_viewport.y,
+                                       gfx_current_game_window_viewport.x + gfx_current_game_window_viewport.width,
+                                       gfx_current_game_window_viewport.y + gfx_current_game_window_viewport.height);
         }
     } else if (fbActive) {
         // Failsafe reset to main framebuffer to prevent softlocking the renderer
