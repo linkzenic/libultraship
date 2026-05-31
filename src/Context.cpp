@@ -226,8 +226,13 @@ void Context::InitResourceManager(const std::vector<std::string>& otrFiles,
         return;
     }
 
+#if defined(__ANDROID__)
+    mMainPath = GetAppDirectoryPath();
+    mPatchesPath = GetAppDirectoryPath() + "/mods";
+#else
     mMainPath = GetConfig()->GetString("Game.Main Archive", GetAppDirectoryPath());
     mPatchesPath = GetConfig()->GetString("Game.Patches Archive", GetAppDirectoryPath() + "/mods");
+#endif
     if (otrFiles.empty()) {
         std::vector<std::string> paths = std::vector<std::string>();
         paths.push_back(mMainPath);
