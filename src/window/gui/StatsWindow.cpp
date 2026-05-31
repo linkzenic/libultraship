@@ -5,6 +5,9 @@
 #include <imgui.h>
 #include "public/bridge/consolevariablebridge.h"
 #include "spdlog/spdlog.h"
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 
 namespace Ship {
 StatsWindow::~StatsWindow() {
@@ -21,6 +24,18 @@ void StatsWindow::DrawElement() {
 
 #if defined(_WIN32)
     ImGui::Text("Platform: Windows");
+#elif defined(__ANDROID__)
+    char androidRelease[PROP_VALUE_MAX] = {};
+    char androidSdk[PROP_VALUE_MAX] = {};
+    __system_property_get("ro.build.version.release", androidRelease);
+    __system_property_get("ro.build.version.sdk", androidSdk);
+    if (androidRelease[0] != '\0' && androidSdk[0] != '\0') {
+        ImGui::Text("Platform: Android %s (API %s)", androidRelease, androidSdk);
+    } else if (androidRelease[0] != '\0') {
+        ImGui::Text("Platform: Android %s", androidRelease);
+    } else {
+        ImGui::Text("Platform: Android");
+    }
 #elif defined(__IOS__)
     ImGui::Text("Platform: iOS");
 #elif defined(__APPLE__)
