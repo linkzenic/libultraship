@@ -8,6 +8,11 @@
 #include "graphic/Fast3D/debug/GfxDebugger.h"
 #include "graphic/Fast3D/Fast3dWindow.h"
 
+#if defined(__ANDROID__)
+#include <jni.h>
+#include <SDL.h>
+#endif
+
 #ifdef _WIN32
 #include <tchar.h>
 #endif
@@ -18,6 +23,42 @@
 
 namespace Ship {
 std::weak_ptr<Context> Context::mContext;
+
+#if defined(__ANDROID__)
+static std::string GetAndroidDataRootPath() {
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    if (env == nullptr) {
+        return "/storage/emulated/0/2S2H";
+    }
+
+    jclass mainActivityClass = env->FindClass("com/dishii/mm/MainActivity");
+    if (mainActivityClass == nullptr) {
+        return "/storage/emulated/0/2S2H";
+    }
+
+    jmethodID getPathMethod =
+        env->GetStaticMethodID(mainActivityClass, "getDataRootPathFromNative", "()Ljava/lang/String;");
+    if (getPathMethod == nullptr) {
+        env->DeleteLocalRef(mainActivityClass);
+        return "/storage/emulated/0/2S2H";
+    }
+
+    jstring pathString = (jstring)env->CallStaticObjectMethod(mainActivityClass, getPathMethod);
+    env->DeleteLocalRef(mainActivityClass);
+    if (pathString == nullptr) {
+        return "/storage/emulated/0/2S2H";
+    }
+
+    const char* pathChars = env->GetStringUTFChars(pathString, nullptr);
+    std::string path = pathChars != nullptr ? pathChars : "/storage/emulated/0/2S2H";
+    if (pathChars != nullptr) {
+        env->ReleaseStringUTFChars(pathString, pathChars);
+    }
+    env->DeleteLocalRef(pathString);
+
+    return path.empty() ? "/storage/emulated/0/2S2H" : path;
+}
+#endif
 
 std::shared_ptr<Context> Context::GetInstance() {
     return mContext.lock();
@@ -316,10 +357,7 @@ std::string Context::GetShortName() {
 
 std::string Context::GetAppBundlePath() {
 #if defined(__ANDROID__)
-    const char* externaldir = "/storage/emulated/0/2S2H";//SDL_AndroidGetExternalStoragePath();
-    if (externaldir != NULL) {
-        return externaldir;
-    }
+    return GetAndroidDataRootPath();
 #endif
 
 #ifdef __IOS__
@@ -357,10 +395,7 @@ std::string Context::GetAppBundlePath() {
 
 std::string Context::GetAppDirectoryPath(std::string appName) {
 #if defined(__ANDROID__)
-    const char* externaldir = "/storage/emulated/0/2S2H"; //SDL_AndroidGetExternalStoragePath();
-    if (externaldir != NULL) {
-        return externaldir;
-    }
+    return GetAndroidDataRootPath();
 #endif
 
 #ifdef __IOS__
