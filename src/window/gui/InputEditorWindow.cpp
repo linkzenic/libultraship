@@ -205,8 +205,10 @@ void InputEditorWindow::DrawInputChip(const char* buttonName, ImVec4 color = CHI
 
 void InputEditorWindow::DrawButtonLineAddMappingButton(uint8_t port, CONTROLLERBUTTONS_T bitmask) {
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(1.0f, 0.5f));
-    auto popupId = StringHelper::Sprintf("addButtonMappingPopup##%d-%d", port, bitmask);
-    if (ImGui::Button(StringHelper::Sprintf("%s###addButtonMappingButton%d-%d", ICON_FA_PLUS, port, bitmask).c_str(),
+    auto popupId = StringHelper::Sprintf("addButtonMappingPopup##%d-%u", port, static_cast<uint32_t>(bitmask));
+    if (ImGui::Button(StringHelper::Sprintf("%s###addButtonMappingButton%d-%u", ICON_FA_PLUS, port,
+                                            static_cast<uint32_t>(bitmask))
+                          .c_str(),
                       ImVec2(SCALE_IMGUI_SIZE(20.0f), 0.0f))) {
         ImGui::OpenPopup(popupId.c_str());
     };

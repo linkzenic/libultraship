@@ -17,7 +17,7 @@ namespace Ship {
 
 Controller::Controller(uint8_t portIndex, std::vector<CONTROLLERBUTTONS_T> additionalBitmasks)
     : ControlDevice(portIndex) {
-    for (auto bitmask : { BUTTON_BITMASKS }) {
+    for (CONTROLLERBUTTONS_T bitmask : { BUTTON_BITMASKS }) {
         mButtons[bitmask] = std::make_shared<ControllerButton>(portIndex, bitmask);
     }
     for (auto bitmask : additionalBitmasks) {

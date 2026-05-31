@@ -28,7 +28,7 @@ uint8_t KeyboardKeyToButtonMapping::GetMappingType() {
 }
 
 std::string KeyboardKeyToButtonMapping::GetButtonMappingId() {
-    return StringHelper::Sprintf("P%d-B%d-KB%d", mPortIndex, mBitmask, mKeyboardScancode);
+    return StringHelper::Sprintf("P%d-B%u-KB%d", mPortIndex, static_cast<uint32_t>(mBitmask), mKeyboardScancode);
 }
 
 void KeyboardKeyToButtonMapping::SaveToConfig() {

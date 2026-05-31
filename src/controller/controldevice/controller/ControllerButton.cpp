@@ -48,6 +48,22 @@ std::string ControllerButton::GetConfigNameFromBitmask(CONTROLLERBUTTONS_T bitma
             return "DUp";
         case BTN_DDOWN:
             return "DDown";
+        case BTN_CUSTOM_OCARINA_NOTE_D4:
+            return "OcarinaD4";
+        case BTN_CUSTOM_OCARINA_NOTE_F4:
+            return "OcarinaF4";
+        case BTN_CUSTOM_OCARINA_NOTE_A4:
+            return "OcarinaA4";
+        case BTN_CUSTOM_OCARINA_NOTE_B4:
+            return "OcarinaB4";
+        case BTN_CUSTOM_OCARINA_NOTE_D5:
+            return "OcarinaD5";
+        case BTN_CUSTOM_OCARINA_DISABLE_SONGS:
+            return "OcarinaDisableSongs";
+        case BTN_CUSTOM_OCARINA_PITCH_UP:
+            return "OcarinaPitchUp";
+        case BTN_CUSTOM_OCARINA_PITCH_DOWN:
+            return "OcarinaPitchDown";
         default:
             // if we don't have a name for this bitmask,
             // which happens with additionalBitmasks provided by ports,
