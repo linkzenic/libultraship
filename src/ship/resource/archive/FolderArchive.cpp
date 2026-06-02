@@ -15,7 +15,9 @@ FolderArchive::FolderArchive(const std::string& archivePath) : Archive(archivePa
 }
 
 Ship::FolderArchive::~FolderArchive() {
-    SPDLOG_TRACE("destruct folderarchive: {}", GetPath());
+    if (spdlog::default_logger() != nullptr) {
+        SPDLOG_TRACE("destruct folderarchive: {}", GetPath());
+    }
 }
 
 bool FolderArchive::Open() {

@@ -130,9 +130,15 @@ void Gui::Init(GuiWindowInitData windowImpl) {
                                                           &iconsConfig, sIconsRanges);
 
 #if defined(__ANDROID__)
-    // Scale everything by 1.5 for Android and enable gamepad
-    ImGui::GetStyle().ScaleAllSizes(1.5f);
-    mImGuiIo->FontGlobalScale = 1.5f;
+    // Scale Android menus from the persisted in-app setting.
+    float androidMenuScale = CVarGetFloat("gSettings.Menu.AndroidScale", 1.45f);
+    if (androidMenuScale < 1.0f) {
+        androidMenuScale = 1.0f;
+    } else if (androidMenuScale > 3.0f) {
+        androidMenuScale = 3.0f;
+    }
+    ImGui::GetStyle().ScaleAllSizes(androidMenuScale);
+    mImGuiIo->FontGlobalScale = androidMenuScale;
     CVarSetInteger(CVAR_IMGUI_CONTROLLER_NAV, 1);
 #endif
 

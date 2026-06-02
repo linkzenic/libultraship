@@ -5,12 +5,16 @@
 #include "spdlog/spdlog.h"
 
 namespace Ship {
-O2rArchive::O2rArchive(const std::string& archivePath) : Archive(archivePath) {
+O2rArchive::O2rArchive(const std::string& archivePath) : Archive(archivePath), mZipArchive(nullptr) {
 }
 
 O2rArchive::~O2rArchive() {
-    SPDLOG_TRACE("destruct o2rarchive: {}", GetPath());
-    Close();
+    if (spdlog::default_logger() != nullptr) {
+        SPDLOG_TRACE("destruct o2rarchive: {}", GetPath());
+    }
+    if (mZipArchive != nullptr) {
+        Close();
+    }
 }
 
 std::shared_ptr<File> O2rArchive::LoadFile(uint64_t hash) {

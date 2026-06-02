@@ -26,6 +26,14 @@
 namespace Ship {
 std::weak_ptr<Context> Context::mContext;
 
+#ifdef __ANDROID__
+static std::string sAndroidDataRootPath = "/storage/emulated/0/2S2H";
+
+static std::string GetAndroidDataRootPath() {
+    return sAndroidDataRootPath;
+}
+#endif
+
 std::shared_ptr<Context> Context::GetInstance() {
     return mContext.lock();
 }
@@ -390,12 +398,17 @@ std::string Context::GetShortName() {
     return mShortName;
 }
 
+#if defined(__ANDROID__)
+void Context::SetAndroidDataRootPath(const std::string& path) {
+    if (!path.empty()) {
+        sAndroidDataRootPath = path;
+    }
+}
+#endif
+
 std::string Context::GetAppBundlePath() {
 #if defined(__ANDROID__)
-    const char* externaldir = "/storage/emulated/0/2S2H";//SDL_AndroidGetExternalStoragePath();
-    if (externaldir != NULL) {
-        return externaldir;
-    }
+    return GetAndroidDataRootPath();
 #endif
 
 #ifdef __IOS__
@@ -455,10 +468,7 @@ std::string Context::GetAppBundlePath() {
 
 std::string Context::GetAppDirectoryPath(std::string appName) {
 #if defined(__ANDROID__)
-    const char* externaldir = "/storage/emulated/0/2S2H"; //SDL_AndroidGetExternalStoragePath();
-    if (externaldir != NULL) {
-        return externaldir;
-    }
+    return GetAndroidDataRootPath();
 #endif
 
 #ifdef __IOS__

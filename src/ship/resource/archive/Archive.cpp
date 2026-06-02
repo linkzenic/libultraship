@@ -20,7 +20,9 @@ Archive::Archive(const std::string& path)
 }
 
 Archive::~Archive() {
-    SPDLOG_TRACE("destruct archive: {}", GetPath());
+    if (spdlog::default_logger() != nullptr) {
+        SPDLOG_TRACE("destruct archive: {}", GetPath());
+    }
 }
 
 bool Archive::operator==(const Archive& rhs) const {

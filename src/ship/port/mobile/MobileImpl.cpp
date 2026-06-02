@@ -77,7 +77,7 @@ float Ship::Mobile::GetCameraPitch(){
 static int virtual_joystick_id = -1;
 static SDL_Joystick *virtual_joystick = nullptr;
 
-extern "C" void JNICALL Java_com_dishii_mm_MainActivity_attachController(JNIEnv* env, jobject obj) {
+extern "C" void JNICALL Java_com_twoshipfork_mm_MainActivity_attachController(JNIEnv* env, jobject obj) {
     virtual_joystick_id = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 18, 0);
     if (virtual_joystick_id == -1) {
             SDL_Log("Could not create overlay virtual controller");
@@ -91,7 +91,7 @@ extern "C" void JNICALL Java_com_dishii_mm_MainActivity_attachController(JNIEnv*
     isUsingTouchscreenControls = true;
 }
 
-extern "C" void JNICALL Java_com_dishii_mm_MainActivity_setCameraState(JNIEnv *env, jobject jobj, jint axis, jfloat value) {
+extern "C" void JNICALL Java_com_twoshipfork_mm_MainActivity_setCameraState(JNIEnv *env, jobject jobj, jint axis, jfloat value) {
     switch(axis){
         case 0:
             cameraYaw=value;
@@ -102,7 +102,7 @@ extern "C" void JNICALL Java_com_dishii_mm_MainActivity_setCameraState(JNIEnv *e
     }
 }
 
-extern "C" void JNICALL Java_com_dishii_mm_MainActivity_setButton(JNIEnv *env, jobject jobj, jint button, jboolean value) {
+extern "C" void JNICALL Java_com_twoshipfork_mm_MainActivity_setButton(JNIEnv *env, jobject jobj, jint button, jboolean value) {
     if(button < 0){
         SDL_JoystickSetVirtualAxis(virtual_joystick,-button, value ? SDL_MAX_SINT16 : -SDL_MAX_SINT16); // This should be 0 when false, but I think there's a bug in SDL
     }else{
@@ -112,11 +112,11 @@ extern "C" void JNICALL Java_com_dishii_mm_MainActivity_setButton(JNIEnv *env, j
 
 #include "ship/Context.h"
 
-extern "C" void JNICALL Java_com_dishii_mm_MainActivity_setAxis(JNIEnv *env, jobject jobj, jint axis, jshort value) {
+extern "C" void JNICALL Java_com_twoshipfork_mm_MainActivity_setAxis(JNIEnv *env, jobject jobj, jint axis, jshort value) {
     SDL_JoystickSetVirtualAxis(virtual_joystick, axis, value);
 }
 
-extern "C" void JNICALL Java_com_dishii_mm_MainActivity_detachController(JNIEnv *env, jobject jobj) {
+extern "C" void JNICALL Java_com_twoshipfork_mm_MainActivity_detachController(JNIEnv *env, jobject jobj) {
     SDL_JoystickClose(virtual_joystick);
     SDL_JoystickDetachVirtual(virtual_joystick_id);
     virtual_joystick = nullptr;
