@@ -4236,6 +4236,11 @@ bool Interpreter::IsFrameReady() {
 }
 
 bool Interpreter::ViewportMatchesRendererResolution() {
+#ifdef USE_OPENGLES
+    // Android/GLES framebuffer readback is only reliable from an owned framebuffer.
+    // Keep native-resolution rendering on the same offscreen path as higher resolutions.
+    return false;
+#endif
 #ifdef __APPLE__
     // Always treat the viewport as not matching the render resolution on mac
     // to avoid issues with retina scaling.
