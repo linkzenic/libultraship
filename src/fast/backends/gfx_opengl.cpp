@@ -815,7 +815,7 @@ void GfxRenderingAPIOGL::ResolveMSAAColorBuffer(int fb_id_target, int fb_id_sour
 
     glBlitFramebuffer(0, 0, fb_src.width, fb_src.height, 0, 0, fb_dst.width, fb_dst.height, GL_COLOR_BUFFER_BIT,
                       GL_NEAREST);
-    glBindFramebuffer(GL_FRAMEBUFFER, mCurrentFrameBuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, mFrameBuffers[mCurrentFrameBuffer].fbo);
 
     glEnable(GL_SCISSOR_TEST);
 }
