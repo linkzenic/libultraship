@@ -22,6 +22,7 @@
 #include "ship/window/gui/Gui.h"
 #include <prism/processor.h>
 #include <fstream>
+#include <vector>
 #include "ship/Context.h"
 #include "ship/resource/factory/ShaderFactory.h"
 #include "fast/interpreter.h"
@@ -855,7 +856,7 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
 
     // For msaa enabled buffers we can't perform a scaled blit to a simple sample buffer
     // First do an unscaled blit to a msaa resolved buffer
-    if (src.height != dst.height && src.width != dst.width && src.msaa_level > 1) {
+    if ((src.height != dst.height || src.width != dst.width) && src.msaa_level > 1) {
         // Start with the main buffer (0) as the msaa resolved buffer
         int fb_resolve_id = 0;
         FramebufferOGL fb_resolve = mFrameBuffers[fb_resolve_id];
@@ -890,7 +891,7 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
 
     glBindFramebuffer(GL_FRAMEBUFFER, mFrameBuffers[mCurrentFrameBuffer].fbo);
 
-    glReadBuffer(GL_BACK);
+    glReadBuffer(mCurrentFrameBuffer == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0);
 
     glEnable(GL_SCISSOR_TEST);
 }
@@ -900,9 +901,28 @@ void GfxRenderingAPIOGL::ReadFramebufferToCPU(int fb_id, uint32_t width, uint32_
         return;
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, mFrameBuffers[fb_id].fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, mFrameBuffers[fb_id].fbo);
+    glReadBuffer(fb_id == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0);
+#ifdef USE_OPENGLES
+    // Some GLES drivers do not reliably support reading RGBA5551 directly from
+    // an RGBA framebuffer. Read RGBA8 and pack to RGBA16 so Android pictograph
+    // captures still get valid pixel data at native/internal 100% resolution.
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    std::vector<uint8_t> rgba8Buf(width * height * 4);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba8Buf.data());
+
+    for (size_t i = 0; i < (size_t)width * height; i++) {
+        uint8_t r = rgba8Buf[i * 4 + 0] >> 3;
+        uint8_t g = rgba8Buf[i * 4 + 1] >> 3;
+        uint8_t b = rgba8Buf[i * 4 + 2] >> 3;
+        uint8_t a = rgba8Buf[i * 4 + 3] >= 0x80 ? 1 : 0;
+        rgba16_buf[i] = (r << 11) | (g << 6) | (b << 1) | a;
+    }
+#else
     glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, (void*)rgba16_buf);
+#endif
     glBindFramebuffer(GL_FRAMEBUFFER, mFrameBuffers[mCurrentFrameBuffer].fbo);
+    glReadBuffer(mCurrentFrameBuffer == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0);
 }
 
 std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff>
