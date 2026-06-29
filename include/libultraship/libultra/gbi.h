@@ -2829,11 +2829,11 @@ typedef union Gfx {
         _g->words.w1 = _SHIFTL((r) & 0xFF, 16, 8) | _SHIFTL((g) & 0xFF, 8, 8) | _SHIFTL((b) & 0xFF, 0, 8);      \
     }
 
-// SOH [Enhancement] Actor shadow per-object marker. nx/ny/nz are the floor polygon's unit normal (each a
-// signed byte, * 127) and `planeD` is that plane's constant (raw float bits in w1) so the renderer can
-// flatten the object onto the actual tilted floor, not a flat horizontal plane. A zero normal disarms the
-// shadow for this object. Blend strength + length are global (pushed once per frame, not per object). The
-// shadow direction reuses the object's gSPToonKey, so emit this AFTER the key.
+// SOH [Enhancement] Actor shadow per-object marker (low-level primitive; prefer gSPToonShadowArm to arm).
+// `planeD` carries the eased 0..1 shadow SIZE for this object (raw float bits in w1). The three normal bytes
+// are an arm channel: nz is the arm marker (any nonzero byte arms the shadow; all-zero disarms it), and nx:ny
+// carry an s16 "feet-clamp" world Y (see gSPToonShadowArm). Blend strength + length are global (pushed once
+// per frame, not per object). The shadow direction reuses the object's gSPToonKey, so emit this AFTER the key.
 #define gSPToonShadow(pkt, nx, ny, nz, planeD)                                                     \
     {                                                                                              \
         Gfx* _g = (Gfx*)(pkt);                                                                     \
@@ -2846,6 +2846,16 @@ typedef union Gfx {
                        _SHIFTL((ny) & 0xFF, 8, 8) | _SHIFTL((nz) & 0xFF, 0, 8);                    \
         _g->words.w1 = _pd.u;                                                                      \
     }
+
+// SOH [Enhancement] Actor shadow: arm this object's drop shadow with an eased `size` (0..1) and an optional
+// `feetClampY` — an s16 world Y the renderer raises the shadow's feet UP to before building the ground slab.
+// Models whose geometry dips far below the floor (e.g. a signpost's buried post) otherwise sink the whole
+// slab below ground and cast no shadow; clamping the feet to the floor Y keeps the slab at ground level. Pass
+// TOON_SHADOW_NO_CLAMP to leave the feet at the captured geometry (the default for normal actors). nz holds
+// the arm marker so the shadow arms even when the clamp bytes are zero.
+#define TOON_SHADOW_NO_CLAMP (-32768)
+#define gSPToonShadowArm(pkt, feetClampY, size)                                                    \
+    gSPToonShadow(pkt, ((s32)(feetClampY) >> 8) & 0xFF, (s32)(feetClampY) & 0xFF, 0x7F, (size))
 
 // SOH [Enhancement] Actor shadow: render the frame's accumulated shadow volumes now. Emitted at the pre-actor
 // hook (after the room, before actors) so the shadows land only on the environment. A zero normal + the

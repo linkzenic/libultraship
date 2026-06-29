@@ -275,6 +275,11 @@ struct RSP {
     // the drop shadow on the same light the cel shading uses.
     float toon_shadow_size;   // eased 0..1 drop-shadow size for this object (carried in the arm command's w1)
     float toon_shadow_dir[3]; // key direction captured at arm time, used by the deferred shadow flush
+    // Optional per-object feet clamp: when armed, raise the shadow slab's feet UP to this world Y so a model
+    // whose geometry dips below the floor (a signpost's buried post) doesn't sink the slab below ground. The
+    // flag is false when the object passed TOON_SHADOW_NO_CLAMP (the default — leave the feet at the geometry).
+    float toon_shadow_feet_clamp_y;
+    bool toon_shadow_clamp_feet;
 
     uint32_t geometry_mode;
     int16_t fog_mul, fog_offset;

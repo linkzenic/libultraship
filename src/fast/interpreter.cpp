@@ -2431,8 +2431,15 @@ void Interpreter::FlushToonShadow() {
         vertN++;
     }
     const float cenX = sumX / (float)vertN, cenZ = sumZ / (float)vertN;
-    const float slabTop = minY + mShadowSlabRise;                     // above the feet (uphill ground)
-    const float slabBottom = minY - std::max(5.0f, mShadowSlabDepth); // below the feet (downhill / cliffs)
+    // Feet level, optionally raised UP to the floor Y the game passed: a model whose geometry dips far below
+    // the floor (a signpost's buried post) would otherwise build the whole slab below ground and cast nothing.
+    // Clamp only ever LIFTS the feet (max), so an actor standing on/above the floor is unaffected.
+    float feetY = minY;
+    if (mRsp->toon_shadow_clamp_feet) {
+        feetY = std::max(minY, mRsp->toon_shadow_feet_clamp_y);
+    }
+    const float slabTop = feetY + mShadowSlabRise;                     // above the feet (uphill ground)
+    const float slabBottom = feetY - std::max(5.0f, mShadowSlabDepth); // below the feet (downhill / cliffs)
 
     // Cast direction from the cel key light (toward-light dir snapshotted at arm time), elevation-remapped
     // against world up so a low light still casts a short shadow (Length slider drives minElev).
@@ -4175,10 +4182,12 @@ bool gfx_set_toon_shadow_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
 
-    // Arm flag: any nonzero normal byte arms the shadow for this object; all-zero disarms it.
-    int8_t nx = (cmd->words.w0 >> 16) & 0xFF;
-    int8_t ny = (cmd->words.w0 >> 8) & 0xFF;
-    int8_t nz = (cmd->words.w0 >> 0) & 0xFF;
+    // Arm flag: any nonzero normal byte arms the shadow for this object; all-zero disarms it. nx:ny carry an
+    // s16 "feet-clamp" world Y (or TOON_SHADOW_NO_CLAMP); nz is the arm marker that keeps the shadow armed even
+    // when the clamp bytes happen to be zero.
+    uint8_t nx = (cmd->words.w0 >> 16) & 0xFF;
+    uint8_t ny = (cmd->words.w0 >> 8) & 0xFF;
+    uint8_t nz = (cmd->words.w0 >> 0) & 0xFF;
 
     float sizeOrSentinel;
     uint32_t w1Bits = (uint32_t)cmd->words.w1;
@@ -4195,6 +4204,11 @@ bool gfx_set_toon_shadow_handler_custom(F3DGfx** cmd0) {
 
     gfx->mRsp->toon_shadow_size = sizeOrSentinel;
     gfx->mRdp->toon_shadow = (nx | ny | nz) != 0;
+    // Decode the s16 feet clamp packed in nx:ny (TOON_SHADOW_NO_CLAMP = leave the feet at the captured
+    // geometry). Set alongside toon_shadow_size so the deferred FlushToonShadow reads this object's value.
+    int16_t feetClamp = (int16_t)(((uint16_t)nx << 8) | (uint16_t)ny);
+    gfx->mRsp->toon_shadow_clamp_feet = (feetClamp != -32768);
+    gfx->mRsp->toon_shadow_feet_clamp_y = (float)feetClamp;
     // Snapshot THIS object's key direction (set by the gSPToonKey just before this command) so its
     // deferred shadow flush uses it, not whatever later object last touched toon_key_dir.
     gfx->mRsp->toon_shadow_dir[0] = gfx->mRsp->toon_key_dir[0];
