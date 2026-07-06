@@ -112,7 +112,7 @@ constexpr size_t MAX_TRI_BUFFER = 256;
 Interpreter::Interpreter() {
     mRsp = new RSP();
     mRdp = new RDP();
-    // SOH [Enhancement] 40 (was 32) floats/vertex max to leave headroom for the toon normal attribute.
+    // SOH [Enhancement] Sized by VBO_MAX_FLOATS_PER_VERTEX so there is room for the toon normal attribute.
     mBufVbo = new float[MAX_TRI_BUFFER * (VBO_MAX_FLOATS_PER_VERTEX * 3)];
 }
 
@@ -2619,8 +2619,8 @@ void Interpreter::RenderShadowVolumes() {
     const uint32_t cullFront = get_attr(CULL_FRONT);
     const uint32_t cullBack = get_attr(CULL_BACK);
 
-    // Hard edge: one z-fail mask pass + one composite. (Softening would mean re-marking the volume at offsets,
-    // which costs a full extra volume render per sample — too expensive, so it was removed.)
+    // Hard edge by design: one z-fail mask pass + one composite. (A soft edge would mean re-marking the volume
+    // at offsets — a full extra volume render per sample, too expensive.)
     const uint8_t coreA = (uint8_t)(coreAlpha * 255.0f);
 
     // Transform the whole accumulator to clip space ONCE; the two stencil passes and the debug overlay reuse
@@ -2697,7 +2697,7 @@ void Interpreter::RenderShadowVolumes() {
 
     // debug overlay: draw the volumes translucently (black caps, blue walls), no stencil, no depth, front faces.
     if (mShadowShowVolume) {
-        mRapi->SetStencilMode((int)StencilMode::Off, 0);
+        mRapi->SetStencilMode((int)StencilMode::Off);
         mRsp->geometry_mode = cullBack;
         mRdp->other_mode_l = G_RM_AA_XLU_SURF | G_RM_AA_XLU_SURF2;
         for (int batch = 0; batch < 2; batch++) {
@@ -2714,7 +2714,7 @@ void Interpreter::RenderShadowVolumes() {
         }
     }
 
-    mRapi->SetStencilMode((int)StencilMode::Off, 0);
+    mRapi->SetStencilMode((int)StencilMode::Off);
     mRdp->prim_color = savedPrim;
     mRdp->combine_mode = savedCombine;
     mRdp->other_mode_l = savedOtherL;

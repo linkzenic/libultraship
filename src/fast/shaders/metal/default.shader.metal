@@ -10,7 +10,7 @@ struct FrameUniforms {
 };
 
 struct DrawUniforms {
-    // SOH [Enhancement] Sized to 6 (was 2) to match the C++ DrawUniforms (textureFiltering[SHADER_MAX_TEXTURES]),
+    // SOH [Enhancement] Sized to 6 to match the C++ DrawUniforms (textureFiltering[SHADER_MAX_TEXTURES]),
     // so the toon fields below land at the same byte offset in both structs.
     int textureFiltering[6];
     // SOH [Enhancement] Toon lighting (unconditional so the CB layout matches the C++ struct for

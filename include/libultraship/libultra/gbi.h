@@ -191,7 +191,7 @@
 #define G_SETINTENSITY 0x40
 #define G_SETTOON 0x41 // SOH [Enhancement] toon lighting per-draw marker
 #define G_SETTOONKEY 0x4a // SOH [Enhancement] toon lighting per-object key light (dir + color)
-#define G_SETTOONSHADOW 0x4b // SOH [Enhancement] actor shadow per-object marker (floor plane)
+#define G_SETTOONSHADOW 0x4b // SOH [Enhancement] actor shadow per-object marker (arm/disarm, feet clamp, size)
 #define G_SETSTENCIL 0x46 // SOH [Enhancement] world light casting: per-draw stencil mode
 #define G_LOAD_SHADER 0x43
 #define G_SETTILESIZE_INTERP 0x44

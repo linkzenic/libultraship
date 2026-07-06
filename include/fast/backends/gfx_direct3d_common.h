@@ -19,7 +19,7 @@ struct PerFrameCB {
 };
 
 // SOH [Enhancement] Toon lighting: the per-object dominant light + frame-global ramp shape. Kept in
-// its own constant buffer (register b3) rather than PerFrameCB so that buffer stays purely frame-global;
+// its own constant buffer (register b2) rather than PerFrameCB so that buffer stays purely frame-global;
 // this one is re-uploaded per toon draw. The padding keeps each float3 on a 16-byte boundary so the
 // layout matches the HLSL cbuffer packing rules. Total size 64 bytes (multiple of 16).
 struct PerToonCB {
