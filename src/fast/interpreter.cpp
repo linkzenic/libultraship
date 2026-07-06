@@ -2395,6 +2395,14 @@ static inline uint32_t alpha_comb(uint32_t a, uint32_t b, uint32_t c, uint32_t d
     return (a & 7) | ((b & 7) << 3) | ((c & 7) << 6) | ((d & 7) << 9);
 }
 
+// SOH [Enhancement] Actor shadow: footprint-grid tuning (see FlushToonShadow). 64 cells resolve a Link-sized
+// footprint to about one world unit; one uint64_t bitmask per row.
+static constexpr int kShadowGridSize = 64;
+static_assert(kShadowGridSize <= 64, "grid rows are single uint64_t bitmasks");
+// Per-frame volume accumulator budget. Once a frame's volumes exceed it, later objects skip their shadow
+// (drop the newest, keep what's built) rather than growing unbounded.
+static constexpr size_t kShadowAccumBudgetFloats = 8u * 1024u * 1024u;
+
 // SOH [Enhancement] Actor shadow: BUILD this object's shadow volume and accumulate it for the frame. It is
 // NOT drawn here — all the frame's volumes are rendered together by RenderShadowVolumes() at the pre-actor
 // hook, so the shadow lands only on the environment (the room is in the depth buffer but actors are not yet),
@@ -2404,8 +2412,15 @@ static inline uint32_t alpha_comb(uint32_t a, uint32_t b, uint32_t c, uint32_t d
 // The volume is a thin SLAB at the feet: the captured silhouette projected along the cel key-light direction
 // onto the feet level, then extruded from slabTop (above the feet, catches uphill ground) to slabBottom
 // (below the feet, catches downhill ground / cliffs). The stencil z-fail pass conforms it to the real ground.
-// Each projected triangle becomes its own closed prism with per-face OUTWARD winding (so the z-fail increment
-// hits the right faces despite the clamp-at-0 ops); the per-prism counts compose into the union (the footprint).
+//
+// The slab is built from the FOOTPRINT, not from the triangles: the projected triangles are rasterized into
+// a kShadowGridSize² occupancy grid over the footprint bounds, and the volume is one box per run of occupied
+// cells. This keeps the stencil counts small by construction. The obvious alternative — one closed prism per
+// projected triangle — breaks on anything denser than a vanilla N64 mesh: every prism overlapping a ground
+// pixel z-fail-increments the same 8-bit stencil (and at low camera pitch the view ray's underground segment
+// crosses hundreds more prism walls), so past 255 the increment clamps, the decrement pass walks it to 0, and
+// the shadow shows angle-dependent holes. A ~2k-triangle replacement model is already far past that limit;
+// the grid never gets near it (worst case ≈ 2·kShadowGridSize crossings on a grazing ray).
 void Interpreter::FlushToonShadow() {
     const size_t floatCount = mShadowVerts.size();
     const float coreAlpha = std::clamp(mToonShadowAlpha, 0.0f, 1.0f);
@@ -2418,6 +2433,13 @@ void Interpreter::FlushToonShadow() {
     // popping. At ~0 there's nothing to draw.
     const float sizeScale = std::clamp(mRsp->toon_shadow_size, 0.0f, 1.0f);
     if (sizeScale <= 0.01f) {
+        mShadowVerts.clear();
+        return;
+    }
+
+    // Frame budget: once the accumulated volumes exceed it, drop THIS object's shadow (the newest) and keep
+    // everything already built — one missing shadow, not a whole-frame blink of all of them.
+    if (mShadowVolumeAccum.size() > kShadowAccumBudgetFloats) {
         mShadowVerts.clear();
         return;
     }
@@ -2485,107 +2507,111 @@ void Interpreter::FlushToonShadow() {
         }
     };
 
-    // Build one closed convex prism from the projected actor silhouette. The previous implementation made a
-    // separate eight-triangle prism for EVERY source triangle. Besides multiplying a detailed actor into tens
-    // of thousands of shadow triangles, overlapping prisms could saturate the 8-bit stencil counter and leave
-    // false shadow fragments. A 2D convex hull is independent of the model's unwelded triangle topology and
-    // normally produces only a few dozen volume triangles even for a high-resolution replacement model.
-    struct ShadowPoint {
-        float x;
-        float z;
+    // Rasterize the projected triangles into an occupancy grid over the footprint bounds, then rebuild the
+    // volume as one box per horizontal run of occupied cells. Boxes never overlap and abutting boxes share
+    // exactly-coincident, oppositely-wound walls (identical float coordinates → identical rasterization), so
+    // their z-fail counts cancel and the union reads as one seamless footprint with stencil overlap 1.
+    auto shrink = [&](float& x, float& z) {
+        if (sizeScale < 1.0f) {
+            x = cenX + (x - cenX) * sizeScale;
+            z = cenZ + (z - cenZ) * sizeScale;
+        }
     };
-    std::vector<ShadowPoint> points;
-    points.reserve(vertN);
-    float projectedSumX = 0.0f, projectedSumZ = 0.0f;
+    // Pass 1: bounds of the projected (shrunk) footprint.
+    float minX = 1e30f, maxX = -1e30f, minZ = 1e30f, maxZ = -1e30f;
     for (size_t i = 0; i + 3 <= floatCount; i += 3) {
-        float x, z;
-        projectXZ(mShadowVerts[i], mShadowVerts[i + 1], mShadowVerts[i + 2], x, z);
-        if (!std::isfinite(x) || !std::isfinite(z)) {
-            continue;
-        }
-        points.push_back({ x, z });
-        projectedSumX += x;
-        projectedSumZ += z;
+        float px, pz;
+        projectXZ(mShadowVerts[i], mShadowVerts[i + 1], mShadowVerts[i + 2], px, pz);
+        shrink(px, pz);
+        minX = std::min(minX, px), maxX = std::max(maxX, px);
+        minZ = std::min(minZ, pz), maxZ = std::max(maxZ, pz);
     }
-    if (points.size() < 3) {
+    const float cellW = (maxX - minX) / kShadowGridSize;
+    const float cellH = (maxZ - minZ) / kShadowGridSize;
+    if (cellW < 1e-4f || cellH < 1e-4f) { // footprint degenerate (a line/point) — nothing worth casting
         mShadowVerts.clear();
         return;
     }
+    auto cellX = [&](float x) { return std::clamp((int)((x - minX) / cellW), 0, kShadowGridSize - 1); };
+    auto cellZ = [&](float z) { return std::clamp((int)((z - minZ) / cellH), 0, kShadowGridSize - 1); };
 
-    // Fade by shrinking the complete footprint toward its projected centroid before finding its hull.
-    const float projectedCenX = projectedSumX / (float)points.size();
-    const float projectedCenZ = projectedSumZ / (float)points.size();
-    if (sizeScale < 1.0f) {
-        for (ShadowPoint& p : points) {
-            p.x = projectedCenX + ((p.x - projectedCenX) * sizeScale);
-            p.z = projectedCenZ + ((p.z - projectedCenZ) * sizeScale);
+    // Pass 2: rasterize, conservatively. Mark each triangle's three vertex cells (so sub-cell triangles
+    // still register) plus every cell in its bounding box whose CENTRE lies within half a cell-diagonal of
+    // the triangle (signed edge distance ≥ −margin). The margin matters: a centre exactly on the crack
+    // between two adjacent triangles can be float-marginally outside BOTH, and an exact centre-in-triangle
+    // test then leaves a one-cell pinhole. The margin closes cracks by construction, at the cost of dilating
+    // the footprint by up to half a cell — below the silhouette detail the grid carries anyway.
+    const float margin = 0.5f * sqrtf((cellW * cellW) + (cellH * cellH));
+    uint64_t rows[kShadowGridSize] = {};
+    for (size_t base = 0; base + 9 <= floatCount; base += 9) {
+        float ax, az, bx, bz, cx, cz;
+        projectXZ(mShadowVerts[base + 0], mShadowVerts[base + 1], mShadowVerts[base + 2], ax, az);
+        projectXZ(mShadowVerts[base + 3], mShadowVerts[base + 4], mShadowVerts[base + 5], bx, bz);
+        projectXZ(mShadowVerts[base + 6], mShadowVerts[base + 7], mShadowVerts[base + 8], cx, cz);
+        shrink(ax, az), shrink(bx, bz), shrink(cx, cz);
+        const int axi = cellX(ax), azi = cellZ(az);
+        const int bxi = cellX(bx), bzi = cellZ(bz);
+        const int cxi = cellX(cx), czi = cellZ(cz);
+        rows[azi] |= 1ull << axi;
+        rows[bzi] |= 1ull << bxi;
+        rows[czi] |= 1ull << cxi;
+        const float area2 = ((bx - ax) * (cz - az)) - ((cx - ax) * (bz - az));
+        if (fabsf(area2) < 1e-6f) {
+            continue; // sliver — the vertex cells above are all it gets
+        }
+        // Signed edge distances need a consistent orientation and per-edge length scaling (the raw edge
+        // function is distance × edge length).
+        const float sgn = (area2 >= 0.0f) ? 1.0f : -1.0f;
+        const float len0 = sqrtf(((bx - ax) * (bx - ax)) + ((bz - az) * (bz - az)));
+        const float len1 = sqrtf(((cx - bx) * (cx - bx)) + ((cz - bz) * (cz - bz)));
+        const float len2 = sqrtf(((ax - cx) * (ax - cx)) + ((az - cz) * (az - cz)));
+        const float m0 = -margin * len0, m1 = -margin * len1, m2 = -margin * len2;
+        // Widen the scanned bbox by one cell so the dilated coverage isn't clipped to the vertex cells.
+        const int x0 = std::max(std::min({ axi, bxi, cxi }) - 1, 0);
+        const int x1 = std::min(std::max({ axi, bxi, cxi }) + 1, kShadowGridSize - 1);
+        const int z0 = std::max(std::min({ azi, bzi, czi }) - 1, 0);
+        const int z1 = std::min(std::max({ azi, bzi, czi }) + 1, kShadowGridSize - 1);
+        for (int gz = z0; gz <= z1; gz++) {
+            const float pz = minZ + ((gz + 0.5f) * cellH);
+            for (int gx = x0; gx <= x1; gx++) {
+                const float px = minX + ((gx + 0.5f) * cellW);
+                const float e0 = sgn * (((bx - ax) * (pz - az)) - ((bz - az) * (px - ax)));
+                const float e1 = sgn * (((cx - bx) * (pz - bz)) - ((cz - bz) * (px - bx)));
+                const float e2 = sgn * (((ax - cx) * (pz - cz)) - ((az - cz) * (px - cx)));
+                if (e0 >= m0 && e1 >= m1 && e2 >= m2) {
+                    rows[gz] |= 1ull << gx;
+                }
+            }
         }
     }
 
-    std::sort(points.begin(), points.end(), [](const ShadowPoint& a, const ShadowPoint& b) {
-        return a.x < b.x || (a.x == b.x && a.z < b.z);
-    });
-    points.erase(std::unique(points.begin(), points.end(), [](const ShadowPoint& a, const ShadowPoint& b) {
-                     return fabsf(a.x - b.x) < 0.001f && fabsf(a.z - b.z) < 0.001f;
-                 }),
-                 points.end());
-    if (points.size() < 3) {
-        mShadowVerts.clear();
-        return;
-    }
-
-    auto cross2D = [](const ShadowPoint& o, const ShadowPoint& a, const ShadowPoint& b) {
-        return ((a.x - o.x) * (b.z - o.z)) - ((a.z - o.z) * (b.x - o.x));
-    };
-    std::vector<ShadowPoint> hull;
-    hull.reserve(points.size() * 2);
-    for (const ShadowPoint& p : points) {
-        while (hull.size() >= 2 && cross2D(hull[hull.size() - 2], hull.back(), p) <= 0.001f) {
-            hull.pop_back();
+    // Pass 3: one box (2 caps + 4 walls = 12 tris) per run of occupied cells in each row.
+    for (int gz = 0; gz < kShadowGridSize; gz++) {
+        const uint64_t m = rows[gz];
+        int gx = 0;
+        while (gx < kShadowGridSize) {
+            if (((m >> gx) & 1ull) == 0) {
+                gx++;
+                continue;
+            }
+            const int runStart = gx;
+            while (gx < kShadowGridSize && ((m >> gx) & 1ull)) {
+                gx++;
+            }
+            const float x0 = minX + (runStart * cellW), x1 = minX + (gx * cellW);
+            const float z0 = minZ + (gz * cellH), z1 = minZ + ((gz + 1) * cellH);
+            const float t00[3] = { x0, slabTop, z0 }, t10[3] = { x1, slabTop, z0 };
+            const float t11[3] = { x1, slabTop, z1 }, t01[3] = { x0, slabTop, z1 };
+            const float b00[3] = { x0, slabBottom, z0 }, b10[3] = { x1, slabBottom, z0 };
+            const float b11[3] = { x1, slabBottom, z1 }, b01[3] = { x0, slabBottom, z1 };
+            const float ccx = (x0 + x1) * 0.5f, ccy = (slabTop + slabBottom) * 0.5f, ccz = (z0 + z1) * 0.5f;
+            pushTri(t00, t10, t11, ccx, ccy, ccz, 0), pushTri(t00, t11, t01, ccx, ccy, ccz, 0); // top cap
+            pushTri(b00, b10, b11, ccx, ccy, ccz, 0), pushTri(b00, b11, b01, ccx, ccy, ccz, 0); // bottom cap
+            pushTri(t00, t10, b10, ccx, ccy, ccz, 1), pushTri(t00, b10, b00, ccx, ccy, ccz, 1); // wall z0
+            pushTri(t10, t11, b11, ccx, ccy, ccz, 1), pushTri(t10, b11, b10, ccx, ccy, ccz, 1); // wall x1
+            pushTri(t11, t01, b01, ccx, ccy, ccz, 1), pushTri(t11, b01, b11, ccx, ccy, ccz, 1); // wall z1
+            pushTri(t01, t00, b00, ccx, ccy, ccz, 1), pushTri(t01, b00, b01, ccx, ccy, ccz, 1); // wall x0
         }
-        hull.push_back(p);
-    }
-    const size_t lowerSize = hull.size();
-    for (size_t i = points.size() - 1; i-- > 0;) {
-        const ShadowPoint& p = points[i];
-        while (hull.size() > lowerSize && cross2D(hull[hull.size() - 2], hull.back(), p) <= 0.001f) {
-            hull.pop_back();
-        }
-        hull.push_back(p);
-    }
-    hull.pop_back(); // the monotonic-chain construction repeats the first point
-    if (hull.size() < 3) {
-        mShadowVerts.clear();
-        return;
-    }
-
-    float hullCenX = 0.0f, hullCenZ = 0.0f;
-    for (const ShadowPoint& p : hull) {
-        hullCenX += p.x;
-        hullCenZ += p.z;
-    }
-    hullCenX /= (float)hull.size();
-    hullCenZ /= (float)hull.size();
-    const float volumeCenY = (slabTop + slabBottom) * 0.5f;
-
-    std::vector<std::array<float, 3>> top(hull.size()), bottom(hull.size());
-    for (size_t i = 0; i < hull.size(); i++) {
-        top[i] = { hull[i].x, slabTop, hull[i].z };
-        bottom[i] = { hull[i].x, slabBottom, hull[i].z };
-    }
-    for (size_t i = 1; i + 1 < hull.size(); i++) {
-        pushTri(top[0].data(), top[i].data(), top[i + 1].data(), hullCenX, volumeCenY, hullCenZ, 0);
-        pushTri(bottom[0].data(), bottom[i].data(), bottom[i + 1].data(), hullCenX, volumeCenY, hullCenZ, 0);
-    }
-    for (size_t i = 0; i < hull.size(); i++) {
-        const size_t next = (i + 1) % hull.size();
-        pushTri(top[i].data(), top[next].data(), bottom[next].data(), hullCenX, volumeCenY, hullCenZ, 1);
-        pushTri(top[i].data(), bottom[next].data(), bottom[i].data(), hullCenX, volumeCenY, hullCenZ, 1);
-    }
-
-    // Safety cap: if the per-frame render hook somehow isn't draining the accumulator, don't grow unbounded.
-    if (mShadowVolumeAccum.size() > 8u * 1024u * 1024u) {
-        mShadowVolumeAccum.clear(), mShadowVolumeKind.clear();
     }
     mShadowVerts.clear();
 }
