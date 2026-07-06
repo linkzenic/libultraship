@@ -406,12 +406,15 @@ class Interpreter {
     // SOH [Enhancement] Actor shadow: global look tuning pushed once per frame by the game. alpha is the
     // core blend strength; minElevation is the floor the key's elevation is remapped into (higher = the
     // light is forced steeper = shorter shadows); slabDepth/slabRise bound the shadow slab below/above
-    // the feet; showVolume draws the volumes translucently for debugging.
-    void SetToonShadowParams(float alpha, float minElevation, float slabDepth, float slabRise, bool showVolume) {
+    // the feet; edgeSoftness is the number of penumbra rings (0 = hard edge, max 2); showVolume draws the
+    // volumes translucently for debugging.
+    void SetToonShadowParams(float alpha, float minElevation, float slabDepth, float slabRise, int edgeSoftness,
+                             bool showVolume) {
         mToonShadowAlpha = alpha;
         mToonShadowMinElevation = minElevation;
         mShadowSlabDepth = slabDepth;
         mShadowSlabRise = slabRise;
+        mShadowEdgeSoftness = edgeSoftness;
         mShadowShowVolume = showVolume;
     }
     void StartFrame();
@@ -556,23 +559,30 @@ class Interpreter {
 
     unsigned int mMsaaLevel = 1;
     bool mDroppedFrame{};
-    float* mBufVbo; // 3 vertices in a triangle and 32 floats per vtx
+    float* mBufVbo; // 3 vertices per triangle, VBO_MAX_FLOATS_PER_VERTEX floats per vertex
     size_t mBufVboLen{};
     size_t mBufVboNumTris{};
     // SOH [Enhancement] Actor shadow: world-space positions of the current object's triangles (9 floats
     // per tri), accumulated as the object draws and drained by FlushToonShadow at each object boundary.
     std::vector<float> mShadowVerts;
+    // SOH [Enhancement] Actor shadow: opacity bands the soft edge is built from. Band 0 is the full-opacity
+    // core; higher bands are the one-cell penumbra rings around the silhouette, composited at stepped-down
+    // alpha. Hard edge (EdgeSoftness 0) uses band 0 only.
+    static constexpr int kShadowBands = 3;
     // SOH [Enhancement] Actor shadow: all shadow-volume triangles built this frame (9 floats/tri, outward
-    // wound), drained by RenderShadowVolumes() at the pre-actor hook so shadows fall only on the environment.
-    std::vector<float> mShadowVolumeAccum;
-    std::vector<uint8_t> mShadowVolumeKind; // per accumulated tri: 0 = cap, 1 = wall (only filled for the debug view)
-    // Clip-space transform of mShadowVolumeAccum, computed once per frame in RenderShadowVolumes so the two
-    // stencil passes (and the debug overlay) reuse it instead of re-running the projection per pass.
+    // wound), per band, drained by RenderShadowVolumes() at the pre-actor hook so shadows fall only on the
+    // environment.
+    std::vector<float> mShadowVolumeAccum[kShadowBands];
+    // Per accumulated tri: 0 = cap, 1 = wall (only filled for the debug view).
+    std::vector<uint8_t> mShadowVolumeKind[kShadowBands];
+    // Clip-space transform scratch, reused per band in RenderShadowVolumes so the two stencil passes (and
+    // the debug overlay) reuse it instead of re-running the projection per pass.
     std::vector<LoadedVertex> mShadowXform;
     float mToonShadowAlpha = 0.5f;        // core blend strength (set per frame by SetToonShadowParams)
     float mToonShadowMinElevation = 0.6f; // min remapped key height above the floor (bounds shadow length)
     float mShadowSlabDepth = 40.0f;    // stencil-volume: how far below the feet the slab reaches (ground band)
     float mShadowSlabRise = 10.0f;     // stencil-volume: how far ABOVE the feet the slab top reaches (uphill)
+    int mShadowEdgeSoftness = 1;       // penumbra rings around the silhouette (0 = hard edge, max 2)
     bool mShadowShowVolume = false;    // debug: draw the translucent shadow volume (black caps, blue walls)
     GfxWindowBackend* mWapi = nullptr;
     GfxRenderingAPI* mRapi = nullptr;
