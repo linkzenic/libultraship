@@ -81,9 +81,9 @@ bool GfxRenderingAPIMetal::MetalInit(SDL_Renderer* renderer) {
     mCommandQueue = mDevice->newCommandQueue();
 
     for (size_t i = 0; i < kMaxVertexBufferPoolSize; i++) {
-        // SOH [Enhancement] kInitialVertexBufferLength uses 40 floats/vertex (was a hardcoded 32) to match
-        // the CPU mBufVbo allocation, which gained headroom for the toon-lighting normal attribute. Grows
-        // on demand in StartFrame for scenes that need more (see the DrawTriangles overflow guard).
+        // SOH [Enhancement] kInitialVertexBufferLength uses VBO_MAX_FLOATS_PER_VERTEX to match the CPU
+        // mBufVbo allocation (which includes the toon-lighting normal attribute). Grows on demand in
+        // StartFrame for scenes that need more (see the DrawTriangles overflow guard).
         MTL::Buffer* new_buffer = mDevice->newBuffer(kInitialVertexBufferLength, MTL::ResourceStorageModeShared);
         mVertexBufferPool[i] = new_buffer;
     }
@@ -451,13 +451,6 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
                 stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
                 stencil->setDepthFailureOperation(MTL::StencilOperationKeep);
                 stencil->setDepthStencilPassOperation(MTL::StencilOperationZero); // self-clear as it composites
-            } else if (mStencilMode == (int)StencilMode::ShadowMask) {
-                // SOH [Enhancement] Actor shadows: pass where stored < ref, then write ref. The per-tap ref
-                // is set on the encoder every draw (see note after this block).
-                stencil->setStencilCompareFunction(MTL::CompareFunctionGreater);
-                stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
-                stencil->setDepthFailureOperation(MTL::StencilOperationKeep);
-                stencil->setDepthStencilPassOperation(MTL::StencilOperationReplace);
             } else {
                 stencil->setStencilCompareFunction(MTL::CompareFunctionAlways);
                 stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
@@ -475,13 +468,6 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
         current_framebuffer.mCommandEncoder->setDepthStencilState(depth_stencil_state);
 
         depth_descriptor->release();
-    }
-
-    // SOH [Enhancement] Actor shadows: the ShadowMask reference value changes per tap while the mode stays
-    // ShadowMask, so the descriptor-rebuild guard above doesn't fire between taps. Metal carries the ref as
-    // encoder state (not in the descriptor), so set it every draw while masking.
-    if (mStencilMode == (int)StencilMode::ShadowMask) {
-        current_framebuffer.mCommandEncoder->setStencilReferenceValue(mStencilRef);
     }
 
     if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {

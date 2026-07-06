@@ -17,20 +17,16 @@ struct GfxClipParameters {
 
 enum FilteringMode { FILTER_THREE_POINT, FILTER_LINEAR, FILTER_NONE };
 
-// SOH [Enhancement] World light casting: per-draw stencil mode for the Wind Waker-style stencil
-// light-volume technique. The interpreter pushes this via SetStencilMode (from a gSPStencil command);
-// backends apply the matching stencil state in their per-draw path. Off (0) is normal rendering, so
-// ordinary draws are unaffected. These values must match the WorldLighting policy module.
+// SOH [Enhancement] World light casting / actor shadows: per-draw stencil mode for the Wind Waker-style
+// stencil-volume techniques. The interpreter pushes this via SetStencilMode (from a gSPStencil command,
+// or directly from RenderShadowVolumes); backends apply the matching stencil state in their per-draw
+// path. Off (0) is normal rendering, so ordinary draws are unaffected. These values must match the
+// WorldLighting policy module.
 enum class StencilMode {
     Off = 0,        // no stencil test/write (normal rendering)
     VolumeIncr = 1, // mask: stencil += 1 where a volume face fails the depth test (z-fail)
     VolumeDecr = 2, // mask: stencil -= 1 where a volume face fails the depth test (z-fail)
     Composite = 3,  // draw where stencil != 0, zeroing it as it goes (self-clearing composite)
-    // SOH [Enhancement] Actor shadows: single-layer "paint once per tap" mask. A fragment passes only
-    // where the stored stencil is below the per-draw ref, then writes the ref. With a fresh, increasing
-    // ref per shadow tap this paints each pixel exactly once per tap (overlapping limbs don't blotch),
-    // while each successive tap (higher ref) re-passes and adds one accumulation layer (soft penumbra).
-    ShadowMask = 4,
 };
 
 // A hash function used to hash a: pair<float, float>
@@ -116,13 +112,10 @@ class GfxRenderingAPI {
     }
 
     // SOH [Enhancement] World light casting / actor shadows: the interpreter pushes the current stencil
-    // mode here when a gSPStencil command is seen, or directly from FlushToonShadow; backends read
+    // mode here when a gSPStencil command is seen, or directly from RenderShadowVolumes; backends read
     // mStencilMode in their per-draw path. Off (0) is normal rendering, so ordinary draws are unaffected.
-    // ref is only consumed by the ShadowMask mode (the per-tap reference value); the volume modes compare
-    // against a constant 0 and ignore it, so the default keeps existing call sites unchanged.
-    virtual void SetStencilMode(int mode, int ref = 0) {
+    virtual void SetStencilMode(int mode) {
         mStencilMode = mode;
-        mStencilRef = ref;
     }
 
   protected:
@@ -134,8 +127,7 @@ class GfxRenderingAPI {
     float mToonHighlightIntensity = TOON_SHADING_DEFAULT_HIGHLIGHT;
     float mToonShadowIntensity = TOON_SHADING_DEFAULT_SHADOW;
     float mToonDebug = 0.0f;
-    int mStencilMode = 0; // SOH [Enhancement] world light casting (see StencilMode)
-    int mStencilRef = 0;  // SOH [Enhancement] actor shadows: per-tap reference value for ShadowMask
+    int mStencilMode = 0; // SOH [Enhancement] world light casting / actor shadows (see StencilMode)
     int8_t mCurrentDepthTest = 0;
     int8_t mCurrentDepthMask = 0;
     int8_t mCurrentZmodeDecal = 0;

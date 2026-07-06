@@ -22,9 +22,9 @@
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
 
-// SOH [Enhancement] Max floats packed per vertex into the Fast3D VBO. Grew from 32 to 40 when toon
-// lighting added a world-space normal attribute. The interpreter packs from this and every backend
-// sizes its vertex buffers from it, so they stay in lockstep — change it in one place only.
+// SOH [Enhancement] Max floats packed per vertex into the Fast3D VBO, sized for the largest layout
+// (including toon lighting's world-space normal attribute). The interpreter packs from this and every
+// backend sizes its vertex buffers from it, so they stay in lockstep — change it in one place only.
 #define VBO_MAX_FLOATS_PER_VERTEX 40
 
 #include <stdint.h>
@@ -268,11 +268,10 @@ struct RSP {
     float toon_key_dir[3];
     float toon_key_color[3];
 
-    // SOH [Enhancement] Actor shadow: per-object floor plane (the actual tilted floor polygon the object
-    // is flattened onto, as unit normal xyz + plane constant d, world space) supplied by gSPToonShadow,
-    // and the eased key direction snapshotted when the object armed. The snapshot — not the live
-    // toon_key_dir, which the next object overwrites before this object's deferred shadow flush — keeps
-    // the drop shadow on the same light the cel shading uses.
+    // SOH [Enhancement] Actor shadow: per-object state supplied by gSPToonShadow, including the eased key
+    // direction snapshotted when the object armed. The snapshot — not the live toon_key_dir, which the
+    // next object overwrites before this object's deferred shadow flush — keeps the drop shadow on the
+    // same light the cel shading uses.
     float toon_shadow_size;   // eased 0..1 drop-shadow size for this object (carried in the arm command's w1)
     float toon_shadow_dir[3]; // key direction captured at arm time, used by the deferred shadow flush
     // Optional per-object feet clamp: when armed, raise the shadow slab's feet UP to this world Y so a model
@@ -405,9 +404,9 @@ class Interpreter {
     void GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY);
     GfxRenderingAPI* GetCurrentRenderingAPI();
     // SOH [Enhancement] Actor shadow: global look tuning pushed once per frame by the game. alpha is the
-    // core blend strength; minElevation is the floor the key's height-above-the-floor is remapped into
-    // (higher = the light is forced steeper = shorter shadows); taps is the number of accumulation passes
-    // for the soft penumbra; softness scales the per-tap ground offset.
+    // core blend strength; minElevation is the floor the key's elevation is remapped into (higher = the
+    // light is forced steeper = shorter shadows); slabDepth/slabRise bound the shadow slab below/above
+    // the feet; showVolume draws the volumes translucently for debugging.
     void SetToonShadowParams(float alpha, float minElevation, float slabDepth, float slabRise, bool showVolume) {
         mToonShadowAlpha = alpha;
         mToonShadowMinElevation = minElevation;
@@ -466,10 +465,9 @@ class Interpreter {
     // cache its world-space direction / color / ambient in the RSP for the fragment shader.
     void SelectToonLight();
 
-    // SOH [Enhancement] Actor shadow: project the current object's captured world-space triangles onto
-    // its ground plane along the toon key direction and draw them as flat translucent geometry (reuses
-    // the standard SHADE combine + XLU decal path), accumulated over several offset taps for a soft edge.
-    // Called at each per-object boundary; builds the object's shadow volume and accumulates it for the frame.
+    // SOH [Enhancement] Actor shadow: build the current object's shadow-slab volume from its captured
+    // world-space triangles (projected along the toon key direction) and accumulate it for the frame —
+    // nothing draws here. Called at each per-object boundary; RenderShadowVolumes draws the batch.
     void FlushToonShadow();
     // SOH [Enhancement] Actor shadow: draw all volumes accumulated this frame (batched z-fail stencil +
     // composite), then clear them. Called once per frame at the pre-actor hook so shadows fall only on the

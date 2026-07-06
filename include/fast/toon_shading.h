@@ -5,7 +5,7 @@
 //
 // The effect lives in the toon variant of the Fast3D fragment shaders (a distinct shader compiled
 // when the SHADER_OPT(TOON) bit is set). The application emits a gSPToon(true/false) marker around
-// the draws it wants relit; the interpreter forwards the object-space vertex normal and the single
+// the draws it wants relit; the interpreter forwards the world-space vertex normal and the single
 // dominant light, and the fragment shader ramps N·L. The ramp shape (center/softness/highlight/
 // shadow) is frame-global tuning the application pushes via GfxRenderingAPI::SetToonRamp(); until it
 // does, the backends use the defaults below. The framework never reads the application's config, so

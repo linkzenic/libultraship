@@ -674,12 +674,6 @@ void GfxRenderingAPIOGL::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size
         if (mStencilMode == (int)StencilMode::Composite) {
             glStencilFunc(GL_NOTEQUAL, 0, 0xFF);    // draw where stencil != 0
             glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO); // self-clear as it composites
-        } else if (mStencilMode == (int)StencilMode::ShadowMask) {
-            // SOH [Enhancement] Actor shadows: pass only where the stored stencil is below this tap's ref,
-            // then write the ref. Per-tap ref is applied every draw (it changes while the mode stays
-            // ShadowMask), so the GREATER compare both single-layers one tap and accumulates across taps.
-            glStencilFunc(GL_GREATER, mStencilRef, 0xFF);
-            glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
         } else {
             glStencilFunc(GL_ALWAYS, 0, 0xFF);
             // z-fail count: increment/decrement where the depth test fails (dpfail)
@@ -879,9 +873,9 @@ void GfxRenderingAPIOGL::ClearFramebuffer(bool color, bool depth) {
         glDisable(GL_SCISSOR_TEST);
     }
     glDepthMask(GL_TRUE);
-    // SOH [Enhancement] Actor shadows: also clear the stencil plane (GL_DEPTH24_STENCIL8). The ShadowMask
-    // GREATER-compare assumes stencil starts at 0 each frame; the volume modes self-zero, but the shadow
-    // mask does not. glStencilMask must allow the write for glClear to touch the stencil plane.
+    // SOH [Enhancement] Stencil volumes: also clear the stencil plane (GL_DEPTH24_STENCIL8). The z-fail
+    // masks assume stencil starts at 0 each frame, and the composite only self-zeroes pixels it draws.
+    // glStencilMask must allow the write for glClear to touch the stencil plane.
     glStencilMask(0xFF);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear((color ? GL_COLOR_BUFFER_BIT : 0) | (depth ? (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT) : 0));
