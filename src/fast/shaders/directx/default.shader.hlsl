@@ -36,6 +36,10 @@ float4 fog : FOG;
 float4 grayscale : GRAYSCALE;
 @{update_floats(4)}
 @end
+@if(o_toon)
+float3 normal : NORMAL;
+@{update_floats(3)}
+@end
 
 @for(i in 0..o_inputs)
     @if(o_alpha)
@@ -67,6 +71,23 @@ cbuffer PerFrameCB : register(b0) {
     uint noise_frame;
     float noise_scale;
 }
+
+// SOH [Enhancement] Toon lighting. Its own cbuffer (b2 — the first free slot at this LUS base) so
+// PerFrameCB stays frame-global; only the toon pixel shader declares/reads it. Layout matches the
+// PerToonCB C++ struct; each float3 followed by a float fills a 16-byte register per HLSL packing.
+@if(o_toon)
+cbuffer PerToonCB : register(b2) {
+    float3 toon_light_dir;
+    float toon_ramp_center;
+    float3 toon_light_color;
+    float toon_ramp_softness;
+    float3 toon_ambient;
+    float toon_highlight_intensity;
+    float toon_shadow_intensity;
+    float toon_debug;
+    float2 _toon_pad;
+}
+@end
 
 float random(in float3 value) {
     float random = dot(value, float3(12.9898, 78.233, 37.719));
@@ -120,6 +141,9 @@ PSInput VSMain(
 @if(o_grayscale)
     , float4 grayscale : GRAYSCALE
 @end
+@if(o_toon)
+    , float3 normal : NORMAL
+@end
 @for(i in 0..o_inputs)
     @if(o_alpha)
         , float4 input@{i + 1} : INPUT@{i}
@@ -151,6 +175,10 @@ PSInput VSMain(
 
     @if(o_grayscale)
         result.grayscale = grayscale;
+    @end
+
+    @if(o_toon)
+        result.normal = normal;
     @end
 
     @for(i in 0..o_inputs)
@@ -291,6 +319,24 @@ float4 PSMain(PSInput input, float4 screenSpace : SV_Position) : SV_TARGET {
     texel = WRAP(texel, -0.51, 1.51);
     texel = clamp(texel, 0.0, 1.0);
     // TODO discard if alpha is 0?
+
+    // SOH [Enhancement] Toon lighting: re-light the (white-shaded) albedo with the single dominant
+    // light through a soft half-Lambert ramp.
+    @if(o_toon)
+        float3 toonN = normalize(input.normal);
+        float toonNL = dot(toonN, normalize(toon_light_dir)) * 0.5 + 0.5;
+        float toonRamp = smoothstep(toon_ramp_center - toon_ramp_softness, toon_ramp_center + toon_ramp_softness, toonNL);
+        float3 toonLit = toon_ambient + toon_light_color * toon_highlight_intensity;
+        float3 toonShadow = lerp(toonLit, toon_ambient, toon_shadow_intensity);
+        if (toon_debug > 0.5) {
+            // Diagnostic view: flat white on the lit side of the ramp, flat black in shadow, albedo
+            // discarded — makes it obvious which draws are receiving toon lighting.
+            texel.rgb = float3(toonRamp, toonRamp, toonRamp);
+        } else {
+            texel.rgb = clamp(texel.rgb * lerp(toonShadow, toonLit, toonRamp), 0.0, 1.0);
+        }
+    @end
+
     @if(o_fog)
         @if(o_alpha)
             texel = float4(lerp(texel.rgb, input.fog.rgb, input.fog.a), texel.a);

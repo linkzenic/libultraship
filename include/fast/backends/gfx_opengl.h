@@ -38,6 +38,16 @@ struct ShaderProgram {
     GLint texture_width_location;
     GLint texture_height_location;
     GLint texture_filtering_location;
+    // SOH [Enhancement] Toon lighting
+    bool opt_toon;
+    GLint toon_light_dir_location;
+    GLint toon_light_color_location;
+    GLint toon_ambient_location;
+    GLint toon_ramp_center_location;
+    GLint toon_ramp_softness_location;
+    GLint toon_highlight_intensity_location;
+    GLint toon_shadow_intensity_location;
+    GLint toon_debug_location;
 };
 
 struct FramebufferOGL {

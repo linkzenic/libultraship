@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <set>
 #include "imconfig.h"
+#include "fast/toon_shading.h"
 
 namespace Fast {
 struct ShaderProgram;
@@ -15,6 +16,22 @@ struct GfxClipParameters {
 };
 
 enum FilteringMode { FILTER_THREE_POINT, FILTER_LINEAR, FILTER_NONE };
+
+// SOH [Enhancement] World light casting: per-draw stencil mode for the Wind Waker-style stencil
+// light-volume technique. The interpreter pushes this via SetStencilMode (from a gSPStencil command);
+// backends apply the matching stencil state in their per-draw path. Off (0) is normal rendering, so
+// ordinary draws are unaffected. These values must match the WorldLighting policy module.
+enum class StencilMode {
+    Off = 0,        // no stencil test/write (normal rendering)
+    VolumeIncr = 1, // mask: stencil += 1 where a volume face fails the depth test (z-fail)
+    VolumeDecr = 2, // mask: stencil -= 1 where a volume face fails the depth test (z-fail)
+    Composite = 3,  // draw where stencil != 0, zeroing it as it goes (self-clearing composite)
+    // SOH [Enhancement] Actor shadows: single-layer "paint once per tap" mask. A fragment passes only
+    // where the stored stencil is below the per-draw ref, then writes the ref. With a fresh, increasing
+    // ref per shadow tap this paints each pixel exactly once per tap (overlapping limbs don't blotch),
+    // while each successive tap (higher ref) re-passes and adds one accumulation layer (soft penumbra).
+    ShadowMask = 4,
+};
 
 // A hash function used to hash a: pair<float, float>
 struct hash_pair_ff {
@@ -73,7 +90,52 @@ class GfxRenderingAPI {
     virtual void SetSrgbMode() = 0;
     virtual ImTextureID GetTextureById(int id) = 0;
 
+    // SOH [Enhancement] Toon lighting: the interpreter pushes the per-object dominant light here
+    // before each batch; backends read the mToon* members in their per-draw uniform paths.
+    virtual void SetToonLighting(const float dir[3], const float color[3], const float ambient[3]) {
+        for (int i = 0; i < 3; i++) {
+            mToonLightDir[i] = dir[i];
+            mToonLightColor[i] = color[i];
+            mToonAmbient[i] = ambient[i];
+        }
+    }
+
+    // SOH [Enhancement] Toon lighting: the application pushes the frame-global ramp shape here (the
+    // values are app-side tuning, so the framework never reaches into the app's config to read them).
+    // Backends read the mToonRamp* members in their per-draw uniform paths; they keep their default
+    // (a plain two-tone ramp) until the application overrides them.
+    // debug != 0 switches the toon variant to a diagnostic view: each relit object is drawn as flat
+    // white on the lit side of the ramp and flat black on the shadow side (albedo discarded), so it is
+    // obvious at a glance which draws actually receive toon lighting.
+    virtual void SetToonRamp(float center, float softness, float highlight, float shadow, float debug) {
+        mToonRampCenter = center;
+        mToonRampSoftness = softness;
+        mToonHighlightIntensity = highlight;
+        mToonShadowIntensity = shadow;
+        mToonDebug = debug;
+    }
+
+    // SOH [Enhancement] World light casting / actor shadows: the interpreter pushes the current stencil
+    // mode here when a gSPStencil command is seen, or directly from FlushToonShadow; backends read
+    // mStencilMode in their per-draw path. Off (0) is normal rendering, so ordinary draws are unaffected.
+    // ref is only consumed by the ShadowMask mode (the per-tap reference value); the volume modes compare
+    // against a constant 0 and ignore it, so the default keeps existing call sites unchanged.
+    virtual void SetStencilMode(int mode, int ref = 0) {
+        mStencilMode = mode;
+        mStencilRef = ref;
+    }
+
   protected:
+    float mToonLightDir[3] = { 0.0f, 0.0f, 1.0f };
+    float mToonLightColor[3] = { 1.0f, 1.0f, 1.0f };
+    float mToonAmbient[3] = { 0.0f, 0.0f, 0.0f };
+    float mToonRampCenter = TOON_SHADING_DEFAULT_RAMP_CENTER;
+    float mToonRampSoftness = TOON_SHADING_DEFAULT_RAMP_SOFTNESS;
+    float mToonHighlightIntensity = TOON_SHADING_DEFAULT_HIGHLIGHT;
+    float mToonShadowIntensity = TOON_SHADING_DEFAULT_SHADOW;
+    float mToonDebug = 0.0f;
+    int mStencilMode = 0; // SOH [Enhancement] world light casting (see StencilMode)
+    int mStencilRef = 0;  // SOH [Enhancement] actor shadows: per-tap reference value for ShadowMask
     int8_t mCurrentDepthTest = 0;
     int8_t mCurrentDepthMask = 0;
     int8_t mCurrentZmodeDecal = 0;
