@@ -8,6 +8,8 @@ union Gfx;
 #include "interpreter.h"
 
 namespace Fast {
+using WindowBackend = Ship::WindowBackend;
+
 class Fast3dWindow : public Ship::Window {
   public:
     Fast3dWindow();

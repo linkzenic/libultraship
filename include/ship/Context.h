@@ -30,6 +30,9 @@ class FileDropMgr;
 class Context {
   public:
     static std::shared_ptr<Context> GetInstance();
+    // Compatibility with newer Shipwright game code while retaining the
+    // proven pre-renderer-refactor Android backend.
+    static Context* GetRawInstance();
     static std::shared_ptr<Context> CreateInstance(const std::string name, const std::string shortName,
                                                    const std::string configFilePath,
                                                    const std::vector<std::string>& archivePaths = {},
@@ -44,6 +47,9 @@ class Context {
     static std::string GetPathRelativeToAppDirectory(const std::string path, std::string appName = "");
     static std::string GetPathRelativeToAppBundle(const std::string path);
     static std::string LocateFileAcrossAppDirs(const std::string path, std::string appName = "");
+#if defined(__ANDROID__)
+    static void SetAndroidDataRootPath(const std::string& path);
+#endif
 
     Context(std::string name, std::string shortName, std::string configFilePath);
     ~Context();
