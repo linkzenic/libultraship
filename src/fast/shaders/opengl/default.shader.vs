@@ -36,6 +36,12 @@
     @{update_floats(4)}
 @end
 
+@if(o_toon)
+    @{attr} vec3 aNormal;
+    @{out} vec3 vNormal;
+    @{update_floats(3)}
+@end
+
 @for(i in 0..o_inputs)
     @if(o_alpha)
         @{attr} vec4 aInput@{i + 1};
@@ -68,6 +74,9 @@ void main() {
     @end
     @if(o_grayscale)
         vGrayscaleColor = aGrayscaleColor;
+    @end
+    @if(o_toon)
+        vNormal = aNormal;
     @end
     @for(i in 0..o_inputs)
         vInput@{i + 1} = aInput@{i + 1};

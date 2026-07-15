@@ -109,7 +109,8 @@ constexpr size_t MAX_TRI_BUFFER = 256;
 Interpreter::Interpreter() {
     mRsp = new RSP();
     mRdp = new RDP();
-    mBufVbo = new float[MAX_TRI_BUFFER * (32 * 3)];
+    // SOH [Enhancement] 40 (was 32) floats/vertex max to leave headroom for the toon normal attribute.
+    mBufVbo = new float[MAX_TRI_BUFFER * (VBO_MAX_FLOATS_PER_VERTEX * 3)];
 }
 
 Interpreter::~Interpreter() {
@@ -126,6 +127,9 @@ void GfxSetInstance(std::shared_ptr<Interpreter> gfx) {
 
 void Interpreter::Flush() {
     if (mBufVboLen > 0) {
+        // SOH [Enhancement] Push the dominant toon light for this batch. The backend only consumes it
+        // when the bound shader is a toon variant, so it is a no-op for ordinary draws.
+        mRapi->SetToonLighting(mRsp->toon_light_dir, mRsp->toon_light_color, mRsp->toon_ambient);
         mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
         mBufVboLen = 0;
         mBufVboNumTris = 0;
@@ -1131,6 +1135,57 @@ void Interpreter::CalculateNormalDir(const F3DLight_t* light, float coeffs[3]) {
     Interpreter::NormalizeVector(coeffs);
 }
 
+// SOH [Enhancement] Resolve the single effective light for the current object's toon shading:
+// ambient from the binding's ambient light, and the key direction/colour from the application-supplied
+// gSPToonKey (defaulting to a straight-on white key if none was provided this batch). The application
+// chooses and eases the key; the renderer just consumes it.
+void Interpreter::SelectToonLight() {
+    int amb_idx = mRsp->current_num_lights - 1;
+    if (amb_idx < 0) {
+        amb_idx = 0;
+    }
+    mRsp->toon_ambient[0] = mRsp->current_lights[amb_idx].l.col[0] / 255.0f;
+    mRsp->toon_ambient[1] = mRsp->current_lights[amb_idx].l.col[1] / 255.0f;
+    mRsp->toon_ambient[2] = mRsp->current_lights[amb_idx].l.col[2] / 255.0f;
+
+    // SOH [Enhancement] The game supplies one world-space key light per object via gSPToonKey. The
+    // forwarded normals are world-space too (see GfxSpVertex), so the key is used as-is — no
+    // object-space transform (which would only be correct for one limb of a batched skeletal actor,
+    // but they share a single light uniform). The game drives a single Wind Waker-style key (sun by
+    // day, animating to torches at night).
+    if (!mRsp->toon_key_valid) {
+        // A toon batch reached here with no key supplied. Not expected in normal use — the game emits
+        // gSPToonKey before every object's geometry — so default to a straight-on white key that at
+        // least lights the object evenly rather than leaving the shade undefined.
+        mRsp->toon_light_dir[0] = 0.0f;
+        mRsp->toon_light_dir[1] = 0.0f;
+        mRsp->toon_light_dir[2] = 1.0f;
+        mRsp->toon_light_color[0] = 1.0f;
+        mRsp->toon_light_color[1] = 1.0f;
+        mRsp->toon_light_color[2] = 1.0f;
+        return;
+    }
+
+    mRsp->toon_light_dir[0] = mRsp->toon_key_dir[0];
+    mRsp->toon_light_dir[1] = mRsp->toon_key_dir[1];
+    mRsp->toon_light_dir[2] = mRsp->toon_key_dir[2];
+    // Guard a zero-length key (s8 quantization can collapse a small direction) so NormalizeVector
+    // doesn't divide by zero and produce NaNs — fall back to straight-on.
+    float key_len2 = mRsp->toon_light_dir[0] * mRsp->toon_light_dir[0] +
+                     mRsp->toon_light_dir[1] * mRsp->toon_light_dir[1] +
+                     mRsp->toon_light_dir[2] * mRsp->toon_light_dir[2];
+    if (key_len2 < 1e-8f) {
+        mRsp->toon_light_dir[0] = 0.0f;
+        mRsp->toon_light_dir[1] = 0.0f;
+        mRsp->toon_light_dir[2] = 1.0f;
+    } else {
+        NormalizeVector(mRsp->toon_light_dir);
+    }
+    mRsp->toon_light_color[0] = mRsp->toon_key_color[0];
+    mRsp->toon_light_color[1] = mRsp->toon_key_color[1];
+    mRsp->toon_light_color[2] = mRsp->toon_key_color[2];
+}
+
 void Interpreter::GfxSpMatrix(uint8_t parameters, const int32_t* addr) {
     float matrix[4][4];
 
@@ -1264,6 +1319,9 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
                 static const Light_t lookat_y = {{0, 0, 0}, 0, {0, 0, 0}, 0, {0, 127, 0}, 0};*/
                 CalculateNormalDir(&mRsp->lookat[0], mRsp->current_lookat_coeffs[0]);
                 CalculateNormalDir(&mRsp->lookat[1], mRsp->current_lookat_coeffs[1]);
+                if (mRdp->toon) { // SOH [Enhancement] toon lighting: cache the dominant light
+                    SelectToonLight();
+                }
                 mRsp->lights_changed = false;
             }
 
@@ -1326,6 +1384,38 @@ void Interpreter::GfxSpVertex(size_t n_vertices, size_t dest_index, const F3DVtx
             d->color.r = r > 255 ? 255 : r;
             d->color.g = g > 255 ? 255 : g;
             d->color.b = b > 255 ? 255 : b;
+
+            // SOH [Enhancement] Toon lighting: forward the WORLD-space normal to the fragment shader
+            // and neutralize the vertex shade so the combiner emits pure albedo. The fragment shader
+            // then re-lights it with the single dominant light (also world-space, see SelectToonLight)
+            // through the toon ramp.
+            //
+            // The normal must be transformed object->world here, NOT left in object space: a skeletal
+            // actor (Link, NPCs) draws every limb under its own modelview matrix but batches them into
+            // a single draw call, while the light direction is one per-batch uniform. Object-space
+            // normals would each be in a different limb's space yet share that one uniform, so only one
+            // limb could ever be lit correctly. Transforming into world space puts every limb's normal
+            // in the same frame as the world-space key, so the single uniform is correct for all limbs.
+            // (object->world uses the same row-vector convention as the position transform above; the
+            // shader renormalizes, so uniform limb scale is harmless.)
+            if (mRdp->toon || mRdp->toon_shadow) {
+                float(*mv)[4] = mRsp->modelview_matrix_stack[mRsp->modelview_matrix_stack_size - 1];
+                // SOH [Enhancement] Actor shadow: world-space position (same object->world transform as the
+                // normal). The shadow pass flattens these onto the ground plane; the camera lives in the
+                // projection matrix, so world pos x P_matrix later yields clip space. Computed whenever the
+                // shadow is armed, so shadows work even when the cel relight (mRdp->toon) is off.
+                d->wx = v->ob[0] * mv[0][0] + v->ob[1] * mv[1][0] + v->ob[2] * mv[2][0] + mv[3][0];
+                d->wy = v->ob[0] * mv[0][1] + v->ob[1] * mv[1][1] + v->ob[2] * mv[2][1] + mv[3][1];
+                d->wz = v->ob[0] * mv[0][2] + v->ob[1] * mv[1][2] + v->ob[2] * mv[2][2] + mv[3][2];
+                if (mRdp->toon) {
+                    d->nx = vn->n[0] * mv[0][0] + vn->n[1] * mv[1][0] + vn->n[2] * mv[2][0];
+                    d->ny = vn->n[0] * mv[0][1] + vn->n[1] * mv[1][1] + vn->n[2] * mv[2][1];
+                    d->nz = vn->n[0] * mv[0][2] + vn->n[1] * mv[1][2] + vn->n[2] * mv[2][2];
+                    d->color.r = 255;
+                    d->color.g = 255;
+                    d->color.b = 255;
+                }
+            }
 
             if (mRsp->geometry_mode & G_TEXTURE_GEN) {
                 float dotx = 0, doty = 0;
@@ -1428,6 +1518,19 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
     struct LoadedVertex* v3 = &mRsp->loaded_vertices[vtx3_idx];
     struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
 
+    // SOH [Enhancement] Actor shadow: while the shadow pass is armed for this object, record its world-space
+    // triangles here (before any culling, so the whole silhouette is captured). FlushToonShadow drains them
+    // at the object boundary. is_rect screen-space quads (UI) have no world position, so skip them. The
+    // replayed shadow geometry itself runs with toon_shadow cleared, so it is never re-captured. NOTE: this
+    // is gated on toon_shadow only (NOT mRdp->toon), so shadows work even when the cel relight is disabled.
+    if (mRdp->toon_shadow && !is_rect && (mRsp->geometry_mode & G_LIGHTING)) {
+        for (int si = 0; si < 3; si++) {
+            mShadowVerts.push_back(v_arr[si]->wx);
+            mShadowVerts.push_back(v_arr[si]->wy);
+            mShadowVerts.push_back(v_arr[si]->wz);
+        }
+    }
+
     // if (rand()%2) return;
 
     if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
@@ -1520,6 +1623,8 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
     bool invisible =
         (mRdp->other_mode_l & (3 << 24)) == (G_BL_0 << 24) && (mRdp->other_mode_l & (3 << 20)) == (G_BL_CLR_MEM << 20);
     bool use_grayscale = mRdp->grayscale;
+    // SOH [Enhancement] Toon lighting only applies to lit geometry (where vertex normals exist).
+    bool use_toon = mRdp->toon && (mRsp->geometry_mode & G_LIGHTING);
     auto shader = mRdp->current_shader;
 
     if (texture_edge) {
@@ -1554,6 +1659,9 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
     if (use_grayscale) {
         cc_options |= SHADER_OPT(GRAYSCALE);
     }
+    if (use_toon) {
+        cc_options |= SHADER_OPT(TOON);
+    }
     if (mRdp->loaded_texture[0].masked) {
         cc_options |= SHADER_OPT(TEXEL0_MASK);
     }
@@ -1568,7 +1676,9 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
     }
     if (shader.enabled) {
         cc_options |= SHADER_OPT(USE_SHADER);
-        cc_options |= (shader.id << 17);
+        // SOH [Enhancement] shader.id packs above the option bits; shifted 17->18 to make room for the
+        // TOON opt bit (17). Keep in lockstep with the decode in gfx_cc_get_features.
+        cc_options |= (shader.id << 18);
     }
 
     ColorCombinerKey key;
@@ -1768,6 +1878,14 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
             mBufVbo[mBufVboLen++] = mRdp->grayscale_color.g / 255.0f;
             mBufVbo[mBufVboLen++] = mRdp->grayscale_color.b / 255.0f;
             mBufVbo[mBufVboLen++] = mRdp->grayscale_color.a / 255.0f; // lerp interpolation factor (not alpha)
+        }
+
+        // SOH [Enhancement] Toon lighting: world-space normal (aNormal). The dominant light/ambient
+        // are sent as uniforms (per draw), not per-vertex, to stay within the vertex-attribute limit.
+        if (use_toon) {
+            mBufVbo[mBufVboLen++] = v_arr[i]->nx;
+            mBufVbo[mBufVboLen++] = v_arr[i]->ny;
+            mBufVbo[mBufVboLen++] = v_arr[i]->nz;
         }
 
         for (int j = 0; j < numInputs; j++) {
@@ -2272,6 +2390,261 @@ static inline uint32_t color_comb(uint32_t a, uint32_t b, uint32_t c, uint32_t d
 
 static inline uint32_t alpha_comb(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
     return (a & 7) | ((b & 7) << 3) | ((c & 7) << 6) | ((d & 7) << 9);
+}
+
+// SOH [Enhancement] Actor shadow: BUILD this object's shadow volume and accumulate it for the frame. It is
+// NOT drawn here — all the frame's volumes are rendered together by RenderShadowVolumes() at the pre-actor
+// hook, so the shadow lands only on the environment (the room is in the depth buffer but actors are not yet),
+// exactly like the Wind Waker light pools. That means no self-shadow and no shadowing of other actors, at the
+// cost of one frame of lag in the shadow's position (imperceptible for a ground shadow).
+//
+// The volume is a thin SLAB at the feet: the captured silhouette projected along the cel key-light direction
+// onto the feet level, then extruded from slabTop (above the feet, catches uphill ground) to slabBottom
+// (below the feet, catches downhill ground / cliffs). The stencil z-fail pass conforms it to the real ground.
+// Each projected triangle becomes its own closed prism with per-face OUTWARD winding (so the z-fail increment
+// hits the right faces despite the clamp-at-0 ops); the per-prism counts compose into the union (the footprint).
+void Interpreter::FlushToonShadow() {
+    const size_t floatCount = mShadowVerts.size();
+    const float coreAlpha = std::clamp(mToonShadowAlpha, 0.0f, 1.0f);
+    if (floatCount < 9 || coreAlpha <= 0.0f) {
+        mShadowVerts.clear();
+        return;
+    }
+
+    // Eased size scale (0..1) the game pushes per object, so the shadow grows in / shrinks out instead of
+    // popping. At ~0 there's nothing to draw.
+    const float sizeScale = std::clamp(mRsp->toon_shadow_size, 0.0f, 1.0f);
+    if (sizeScale <= 0.01f) {
+        mShadowVerts.clear();
+        return;
+    }
+
+    // Feet level = the lowest captured vertex (the real rendered feet, not the unreliable collision floor); the
+    // XZ centroid is the point the footprint shrinks toward when sizeScale < 1.
+    float minY = 1e30f, sumX = 0.0f, sumZ = 0.0f;
+    size_t vertN = 0;
+    for (size_t i = 0; i + 3 <= floatCount; i += 3) {
+        sumX += mShadowVerts[i], minY = std::min(minY, mShadowVerts[i + 1]), sumZ += mShadowVerts[i + 2];
+        vertN++;
+    }
+    const float cenX = sumX / (float)vertN, cenZ = sumZ / (float)vertN;
+    const float slabTop = minY + mShadowSlabRise;                     // above the feet (uphill ground)
+    const float slabBottom = minY - std::max(5.0f, mShadowSlabDepth); // below the feet (downhill / cliffs)
+
+    // Cast direction from the cel key light (toward-light dir snapshotted at arm time), elevation-remapped
+    // against world up so a low light still casts a short shadow (Length slider drives minElev).
+    float lx = mRsp->toon_shadow_dir[0], ly = mRsp->toon_shadow_dir[1], lz = mRsp->toon_shadow_dir[2];
+    const float llen = sqrtf((lx * lx) + (ly * ly) + (lz * lz));
+    float dirX, dirY, dirZ;
+    const float minElev = std::clamp(mToonShadowMinElevation, 0.05f, 0.99f);
+    if (llen < 0.001f) {
+        dirX = 0.0f, dirY = -1.0f, dirZ = 0.0f;
+    } else {
+        lx /= llen, ly /= llen, lz /= llen;
+        const float lUp = ly < 0.0f ? 0.0f : ly;
+        const float elev = minElev + ((1.0f - minElev) * lUp);
+        const float hLen = sqrtf((lx * lx) + (lz * lz));
+        if (hLen < 0.001f) {
+            dirX = 0.0f, dirY = -1.0f, dirZ = 0.0f;
+        } else {
+            const float hScale = sqrtf(std::max(0.0f, 1.0f - (elev * elev))) / hLen;
+            dirX = -hScale * lx, dirY = -elev, dirZ = -hScale * lz;
+        }
+    }
+    const float descend = -dirY;
+
+    auto projectXZ = [&](float vx, float vy, float vz, float& ox, float& oz) {
+        float t = (descend > 0.001f) ? ((vy - slabTop) / descend) : 0.0f;
+        if (t < 0.0f) {
+            t = 0.0f;
+        }
+        ox = vx + (dirX * t);
+        oz = vz + (dirZ * t);
+    };
+
+    // Append one outward-wound world-space triangle to the frame accumulator, tagged cap(0) / wall(1).
+    auto pushTri = [&](const float* p0, const float* p1, const float* p2, float ccx, float ccy, float ccz,
+                       uint8_t kind) {
+        const float ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
+        const float vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
+        const float nX = (uy * vz) - (uz * vy), nY = (uz * vx) - (ux * vz), nZ = (ux * vy) - (uy * vx);
+        const float fx = ((p0[0] + p1[0] + p2[0]) / 3.0f) - ccx;
+        const float fy = ((p0[1] + p1[1] + p2[1]) / 3.0f) - ccy;
+        const float fz = ((p0[2] + p1[2] + p2[2]) / 3.0f) - ccz;
+        const bool outward = ((nX * fx) + (nY * fy) + (nZ * fz)) >= 0.0f;
+        const float* q1 = outward ? p1 : p2;
+        const float* q2 = outward ? p2 : p1;
+        mShadowVolumeAccum.push_back(p0[0]), mShadowVolumeAccum.push_back(p0[1]), mShadowVolumeAccum.push_back(p0[2]);
+        mShadowVolumeAccum.push_back(q1[0]), mShadowVolumeAccum.push_back(q1[1]), mShadowVolumeAccum.push_back(q1[2]);
+        mShadowVolumeAccum.push_back(q2[0]), mShadowVolumeAccum.push_back(q2[1]), mShadowVolumeAccum.push_back(q2[2]);
+        if (mShadowShowVolume) { // cap/wall tag is only read by the debug overlay
+            mShadowVolumeKind.push_back(kind);
+        }
+    };
+
+    // Each captured triangle becomes its OWN closed prism (2 caps + 3 walls = 8 tris). This is robust on OoT's
+    // unwelded "triangle soup" meshes (a silhouette-edge optimization that drops interior walls needs shared
+    // edges, which these meshes don't reliably have, so it shattered the shape). The per-prism z-fail counts
+    // still compose into the union (the footprint).
+    for (size_t base = 0; base + 9 <= floatCount; base += 9) {
+        float ax, az, bx, bz, cx, cz;
+        projectXZ(mShadowVerts[base + 0], mShadowVerts[base + 1], mShadowVerts[base + 2], ax, az);
+        projectXZ(mShadowVerts[base + 3], mShadowVerts[base + 4], mShadowVerts[base + 5], bx, bz);
+        projectXZ(mShadowVerts[base + 6], mShadowVerts[base + 7], mShadowVerts[base + 8], cx, cz);
+        if (sizeScale < 1.0f) { // shrink the footprint toward its centroid for the size fade
+            ax = cenX + (ax - cenX) * sizeScale, az = cenZ + (az - cenZ) * sizeScale;
+            bx = cenX + (bx - cenX) * sizeScale, bz = cenZ + (bz - cenZ) * sizeScale;
+            cx = cenX + (cx - cenX) * sizeScale, cz = cenZ + (cz - cenZ) * sizeScale;
+        }
+        const float area = ((bx - ax) * (cz - az)) - ((cx - ax) * (bz - az));
+        if (fabsf(area) < 0.01f) {
+            continue;
+        }
+        const float tA[3] = { ax, slabTop, az }, tB[3] = { bx, slabTop, bz }, tC[3] = { cx, slabTop, cz };
+        const float bA[3] = { ax, slabBottom, az }, bB[3] = { bx, slabBottom, bz }, bC[3] = { cx, slabBottom, cz };
+        const float ccx = (ax + bx + cx) / 3.0f, ccy = (slabTop + slabBottom) * 0.5f, ccz = (az + bz + cz) / 3.0f;
+        pushTri(tA, tB, tC, ccx, ccy, ccz, 0); // top cap
+        pushTri(bA, bB, bC, ccx, ccy, ccz, 0); // bottom cap
+        pushTri(tA, tB, bB, ccx, ccy, ccz, 1), pushTri(tA, bB, bA, ccx, ccy, ccz, 1); // wall a-b
+        pushTri(tB, tC, bC, ccx, ccy, ccz, 1), pushTri(tB, bC, bB, ccx, ccy, ccz, 1); // wall b-c
+        pushTri(tC, tA, bA, ccx, ccy, ccz, 1), pushTri(tC, bA, bC, ccx, ccy, ccz, 1); // wall c-a
+    }
+
+    // Safety cap: if the per-frame render hook somehow isn't draining the accumulator, don't grow unbounded.
+    if (mShadowVolumeAccum.size() > 8u * 1024u * 1024u) {
+        mShadowVolumeAccum.clear(), mShadowVolumeKind.clear();
+    }
+    mShadowVerts.clear();
+}
+
+// SOH [Enhancement] Actor shadow: render every shadow volume accumulated since the last call, as one batched
+// z-fail stencil pass + a single self-clearing composite, then clear the accumulator. Called once per frame at
+// the pre-actor hook (after the room is drawn) so the shadows fall only on the environment.
+void Interpreter::RenderShadowVolumes() {
+    const std::vector<float>& vol = mShadowVolumeAccum;
+    const float coreAlpha = std::clamp(mToonShadowAlpha, 0.0f, 1.0f);
+    if (vol.size() < 9 || coreAlpha <= 0.0f) {
+        mShadowVolumeAccum.clear(), mShadowVolumeKind.clear();
+        return;
+    }
+
+    const uint64_t savedCombine = mRdp->combine_mode;
+    const uint32_t savedOtherL = mRdp->other_mode_l;
+    const uint32_t savedOtherH = mRdp->other_mode_h;
+    const uint32_t savedGeo = mRsp->geometry_mode;
+    const bool savedToon = mRdp->toon;
+    const bool savedToonShadow = mRdp->toon_shadow;
+    const bool savedGray = mRdp->grayscale;
+    const struct RGBA savedPrim = mRdp->prim_color;
+
+    mRdp->toon = false;
+    mRdp->toon_shadow = false; // the volume geometry must not be re-captured
+    mRdp->grayscale = false;
+    mRdp->other_mode_h = (savedOtherH & ~(3U << G_MDSFT_CYCLETYPE)) | G_CYC_1CYCLE;
+    GfxDpSetCombineMode(color_comb(0, 0, 0, G_CCMUX_PRIMITIVE), alpha_comb(0, 0, 0, G_ACMUX_PRIMITIVE), 0, 0);
+
+    const uint32_t cullFront = get_attr(CULL_FRONT);
+    const uint32_t cullBack = get_attr(CULL_BACK);
+
+    // Hard edge: one z-fail mask pass + one composite. (Softening would mean re-marking the volume at offsets,
+    // which costs a full extra volume render per sample — too expensive, so it was removed.)
+    const uint8_t coreA = (uint8_t)(coreAlpha * 255.0f);
+
+    // Transform the whole accumulator to clip space ONCE; the two stencil passes and the debug overlay reuse
+    // it instead of re-projecting every vertex per pass. Vertex color is left undefined: the combine outputs
+    // PRIMITIVE (set per pass via prim_color), so the per-vertex shade color is never used.
+    const size_t vertCount = vol.size() / 3;
+    mShadowXform.resize(vertCount);
+    for (size_t vi = 0; vi < vertCount; vi++) {
+        const float wx = vol[vi * 3 + 0], wy = vol[vi * 3 + 1], wz = vol[vi * 3 + 2];
+        LoadedVertex& d = mShadowXform[vi];
+        d.x = AdjXForAspectRatio((wx * mRsp->P_matrix[0][0]) + (wy * mRsp->P_matrix[1][0]) +
+                                 (wz * mRsp->P_matrix[2][0]) + mRsp->P_matrix[3][0]);
+        d.y = (wx * mRsp->P_matrix[0][1]) + (wy * mRsp->P_matrix[1][1]) + (wz * mRsp->P_matrix[2][1]) +
+              mRsp->P_matrix[3][1];
+        d.z = (wx * mRsp->P_matrix[0][2]) + (wy * mRsp->P_matrix[1][2]) + (wz * mRsp->P_matrix[2][2]) +
+              mRsp->P_matrix[3][2];
+        d.w = (wx * mRsp->P_matrix[0][3]) + (wy * mRsp->P_matrix[1][3]) + (wz * mRsp->P_matrix[2][3]) +
+              mRsp->P_matrix[3][3];
+        d.u = d.v = 0;
+        d.clip_rej = 0;
+    }
+    // Copy triangle t's three cached verts into the scratch slots GfxSpTri1 reads.
+    auto loadTri = [&](size_t t) {
+        mRsp->loaded_vertices[MAX_VERTICES + 0] = mShadowXform[t * 3 + 0];
+        mRsp->loaded_vertices[MAX_VERTICES + 1] = mShadowXform[t * 3 + 1];
+        mRsp->loaded_vertices[MAX_VERTICES + 2] = mShadowXform[t * 3 + 2];
+    };
+    auto drawVolume = [&]() {
+        for (size_t t = 0; (t * 3) + 3 <= vertCount; t++) {
+            loadTri(t);
+            GfxSpTri1(MAX_VERTICES + 0, MAX_VERTICES + 1, MAX_VERTICES + 2, false);
+        }
+    };
+
+    // z-fail mask: back faces increment, front faces decrement -> stencil != 0 where the ground is inside.
+    mRdp->prim_color = { 0, 0, 0, 0 };
+    mRdp->other_mode_l = G_RM_AA_ZB_XLU_SURF | G_RM_AA_ZB_XLU_SURF2;
+    mRsp->geometry_mode = G_ZBUFFER | cullFront;
+    Flush();
+    mRapi->SetStencilMode((int)StencilMode::VolumeIncr);
+    drawVolume();
+    Flush();
+    mRsp->geometry_mode = G_ZBUFFER | cullBack;
+    mRapi->SetStencilMode((int)StencilMode::VolumeDecr);
+    drawVolume();
+    Flush();
+
+    // composite (self-clearing); full-screen clip-space quad, no depth test.
+    mRdp->prim_color = { 0, 0, 0, coreA };
+    mRdp->other_mode_l = G_RM_AA_XLU_SURF | G_RM_AA_XLU_SURF2;
+    mRsp->geometry_mode = 0;
+    mRapi->SetStencilMode((int)StencilMode::Composite);
+    {
+        const float qx[4] = { -1.0f, 1.0f, 1.0f, -1.0f }, qy[4] = { -1.0f, -1.0f, 1.0f, 1.0f };
+        for (int k = 0; k < 4; k++) {
+            LoadedVertex* d = &mRsp->loaded_vertices[MAX_VERTICES + k];
+            d->x = qx[k], d->y = qy[k], d->z = 0.0f, d->w = 1.0f;
+            d->u = d->v = 0;
+            d->color = mRdp->prim_color;
+            d->clip_rej = 0;
+        }
+        GfxSpTri1(MAX_VERTICES + 0, MAX_VERTICES + 1, MAX_VERTICES + 2, false);
+        GfxSpTri1(MAX_VERTICES + 0, MAX_VERTICES + 2, MAX_VERTICES + 3, false);
+    }
+    Flush();
+
+    // debug overlay: draw the volumes translucently (black caps, blue walls), no stencil, no depth, front faces.
+    if (mShadowShowVolume) {
+        mRapi->SetStencilMode((int)StencilMode::Off, 0);
+        mRsp->geometry_mode = cullBack;
+        mRdp->other_mode_l = G_RM_AA_XLU_SURF | G_RM_AA_XLU_SURF2;
+        for (int batch = 0; batch < 2; batch++) {
+            mRdp->prim_color = (batch == 0) ? RGBA{ 0, 0, 0, 128 } : RGBA{ 40, 90, 255, 128 };
+            for (size_t t = 0; (t * 3) + 3 <= vertCount; t++) {
+                const bool isCap = t < mShadowVolumeKind.size() && mShadowVolumeKind[t] == 0;
+                if (isCap != (batch == 0)) {
+                    continue;
+                }
+                loadTri(t);
+                GfxSpTri1(MAX_VERTICES + 0, MAX_VERTICES + 1, MAX_VERTICES + 2, false);
+            }
+            Flush();
+        }
+    }
+
+    mRapi->SetStencilMode((int)StencilMode::Off, 0);
+    mRdp->prim_color = savedPrim;
+    mRdp->combine_mode = savedCombine;
+    mRdp->other_mode_l = savedOtherL;
+    mRdp->other_mode_h = savedOtherH;
+    mRsp->geometry_mode = savedGeo;
+    mRdp->toon = savedToon;
+    mRdp->toon_shadow = savedToonShadow;
+    mRdp->grayscale = savedGray;
+
+    mShadowVolumeAccum.clear();
+    mShadowVolumeKind.clear();
 }
 
 void Interpreter::GfxDpSetGrayscaleColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
@@ -3667,6 +4040,100 @@ bool gfx_set_grayscale_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
+// SOH [Enhancement] Toon lighting per-draw marker (mirrors grayscale).
+bool gfx_set_toon_handler_custom(F3DGfx** cmd0) {
+    Interpreter* gfx = mInstance.lock().get();
+    F3DGfx* cmd = *cmd0;
+
+    // SOH [Enhancement] Actor shadow: draw the last object's drop shadow before the bracket toggles, then
+    // disarm the shadow pass (each object re-arms via gSPToonShadow). Run on both edges so a stale enable
+    // can never leak across the actor-loop boundary.
+    gfx->FlushToonShadow();
+    gfx->mRdp->toon_shadow = false;
+
+    gfx->mRdp->toon = cmd->words.w1;
+    // A fresh key must be supplied (per object) after each toon-on; clear any stale one.
+    gfx->mRsp->toon_key_valid = false;
+    return false;
+}
+
+// SOH [Enhancement] Per-object toon key light: world-space direction (3x s8 / 127) + color (3x u8 / 255).
+bool gfx_set_toon_key_handler_custom(F3DGfx** cmd0) {
+    Interpreter* gfx = mInstance.lock().get();
+    F3DGfx* cmd = *cmd0;
+
+    // SOH [Enhancement] The toon key light is pushed to the GPU once per batch (see Flush) as a single
+    // world-space direction + color. Several objects that share texture/state are otherwise batched into
+    // one draw, so they would all be lit by whichever object's key was set last — each object picks its
+    // own key (the nearest light, or the sun), so a shared batch would mislight all but the last. Flush
+    // the pending geometry now, with the PREVIOUS object's key still in effect, so every toon object
+    // becomes its own correctly-lit batch.
+    gfx->Flush();
+
+    int8_t dx = (cmd->words.w0 >> 16) & 0xFF;
+    int8_t dy = (cmd->words.w0 >> 8) & 0xFF;
+    int8_t dz = (cmd->words.w0 >> 0) & 0xFF;
+    gfx->mRsp->toon_key_dir[0] = dx / 127.0f;
+    gfx->mRsp->toon_key_dir[1] = dy / 127.0f;
+    gfx->mRsp->toon_key_dir[2] = dz / 127.0f;
+    gfx->mRsp->toon_key_color[0] = ((cmd->words.w1 >> 16) & 0xFF) / 255.0f;
+    gfx->mRsp->toon_key_color[1] = ((cmd->words.w1 >> 8) & 0xFF) / 255.0f;
+    gfx->mRsp->toon_key_color[2] = ((cmd->words.w1 >> 0) & 0xFF) / 255.0f;
+    gfx->mRsp->toon_key_valid = true;
+    // The key changes the effective light, so force a recompute on the next vertex.
+    gfx->mRsp->lights_changed = true;
+    return false;
+}
+
+// SOH [Enhancement] Per-object actor shadow marker. The normal bytes are only an arm flag (nonzero = this
+// object casts a shadow, zero = it doesn't) — the renderer builds the volume from the captured feet and the
+// per-object toon key direction, not from a floor plane. w1 carries the eased 0..1 shadow size. Emitting this
+// per object also bounds each object's captured geometry: the previous object's volume is built here before
+// the next one arms.
+bool gfx_set_toon_shadow_handler_custom(F3DGfx** cmd0) {
+    Interpreter* gfx = mInstance.lock().get();
+    F3DGfx* cmd = *cmd0;
+
+    // Arm flag: any nonzero normal byte arms the shadow for this object; all-zero disarms it.
+    int8_t nx = (cmd->words.w0 >> 16) & 0xFF;
+    int8_t ny = (cmd->words.w0 >> 8) & 0xFF;
+    int8_t nz = (cmd->words.w0 >> 0) & 0xFF;
+
+    float sizeOrSentinel;
+    uint32_t w1Bits = (uint32_t)cmd->words.w1;
+    memcpy(&sizeOrSentinel, &w1Bits, sizeof(sizeOrSentinel));
+
+    // Sentinel (gSPToonShadowFlush): a zero normal with this magic w1 means "render the frame's accumulated
+    // shadow volumes now" (emitted at the pre-actor hook so shadows land only on the environment).
+    if ((nx | ny | nz) == 0 && sizeOrSentinel <= -1.0e29f) {
+        gfx->RenderShadowVolumes();
+        return false;
+    }
+
+    gfx->FlushToonShadow(); // build + accumulate the previous object's volume
+
+    gfx->mRsp->toon_shadow_size = sizeOrSentinel;
+    gfx->mRdp->toon_shadow = (nx | ny | nz) != 0;
+    // Snapshot THIS object's key direction (set by the gSPToonKey just before this command) so its
+    // deferred shadow flush uses it, not whatever later object last touched toon_key_dir.
+    gfx->mRsp->toon_shadow_dir[0] = gfx->mRsp->toon_key_dir[0];
+    gfx->mRsp->toon_shadow_dir[1] = gfx->mRsp->toon_key_dir[1];
+    gfx->mRsp->toon_shadow_dir[2] = gfx->mRsp->toon_key_dir[2];
+    return false;
+}
+
+// SOH [Enhancement] World light casting: set the stencil mode for the stencil light-volume technique.
+// Mirrors the toon-key handler's flush-then-set: the mode change must not retroactively apply to already
+// batched geometry, so flush the pending tris (under the previous mode) before switching.
+bool gfx_set_stencil_handler_custom(F3DGfx** cmd0) {
+    Interpreter* gfx = mInstance.lock().get();
+    F3DGfx* cmd = *cmd0;
+
+    gfx->Flush();
+    gfx->mRapi->SetStencilMode((int)cmd->words.w1);
+    return false;
+}
+
 bool gfx_load_block_handler_rdp(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
@@ -4056,6 +4523,11 @@ static constexpr UcodeHandler otrHandlers = {
     { OTR_G_REGBLENDEDTEX,
       { "G_REGBLENDEDTEX", gfx_register_blended_texture_handler_custom } },         // G_REGBLENDEDTEX (0x3f)
     { OTR_G_SETINTENSITY, { "G_SETINTENSITY", gfx_set_intensity_handler_custom } }, // G_SETINTENSITY (0x40)
+    { OTR_G_SETTOON, { "G_SETTOON", gfx_set_toon_handler_custom } },                // G_SETTOON (0x41)
+    { OTR_G_SETTOONKEY, { "G_SETTOONKEY", gfx_set_toon_key_handler_custom } },      // G_SETTOONKEY (0x4a)
+    { OTR_G_SETTOONSHADOW,
+      { "G_SETTOONSHADOW", gfx_set_toon_shadow_handler_custom } }, // G_SETTOONSHADOW (0x4b) actor shadow
+    { OTR_G_SETSTENCIL, { "G_SETSTENCIL", gfx_set_stencil_handler_custom } }, // G_SETSTENCIL (0x46)
     { OTR_G_MOVEMEM_HASH, { "OTR_G_MOVEMEM_HASH", gfx_movemem_handler_otr } },      // OTR_G_MOVEMEM_HASH
     { OTR_G_LOAD_SHADER, { "G_LOAD_SHADER", gfx_set_shader_custom } },
 };
@@ -4696,6 +5168,7 @@ void gfx_cc_get_features(uint64_t shader_id0, uint32_t shader_id1, struct CCFeat
     cc_features->opt_alpha_threshold = (shader_id1 & SHADER_OPT(ALPHA_THRESHOLD)) != 0;
     cc_features->opt_invisible = (shader_id1 & SHADER_OPT(INVISIBLE)) != 0;
     cc_features->opt_grayscale = (shader_id1 & SHADER_OPT(GRAYSCALE)) != 0;
+    cc_features->opt_toon = (shader_id1 & SHADER_OPT(TOON)) != 0; // SOH [Enhancement] toon lighting
 
     cc_features->clamp[0][0] = shader_id1 & SHADER_OPT(TEXEL0_CLAMP_S);
     cc_features->clamp[0][1] = shader_id1 & SHADER_OPT(TEXEL0_CLAMP_T);
@@ -4703,7 +5176,7 @@ void gfx_cc_get_features(uint64_t shader_id0, uint32_t shader_id1, struct CCFeat
     cc_features->clamp[1][1] = shader_id1 & SHADER_OPT(TEXEL1_CLAMP_T);
 
     if (shader_id1 & SHADER_OPT(USE_SHADER)) {
-        cc_features->shader_id = (shader_id1 >> 17) & 0xFFFF;
+        cc_features->shader_id = (shader_id1 >> 18) & 0xFFFF; // SOH [Enhancement] 17->18 for the TOON opt bit
     }
 
     cc_features->usedTextures[0] = false;

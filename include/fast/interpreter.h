@@ -22,6 +22,11 @@
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
 
+// SOH [Enhancement] Max floats packed per vertex into the Fast3D VBO. Grew from 32 to 40 when toon
+// lighting added a world-space normal attribute. The interpreter packs from this and every backend
+// sizes its vertex buffers from it, so they stay in lockstep — change it in one place only.
+#define VBO_MAX_FLOATS_PER_VERTEX 40
+
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -77,6 +82,9 @@ enum class ShaderOpts {
     TEXEL0_BLEND,
     TEXEL1_BLEND,
     USE_SHADER,
+    TOON, // SOH [Enhancement] toon-lighting variant. Bit 17; the loaded-shader id packs ABOVE it
+          // (interpreter.cpp shifts shader.id by 18). Adding an opt here without bumping that shift
+          // would overlap the id and corrupt shader selection.
     MAX
 };
 
@@ -107,6 +115,7 @@ struct CCFeatures {
     bool opt_alpha_threshold;
     bool opt_invisible;
     bool opt_grayscale;
+    bool opt_toon; // SOH [Enhancement] toon lighting
     bool usedTextures[2];
     bool used_masks[2];
     bool used_blend[2];
@@ -209,6 +218,11 @@ struct LoadedVertex {
     float u, v;
     struct RGBA color;
     uint8_t clip_rej;
+    // SOH [Enhancement] World-space vertex normal, forwarded to the fragment shader for toon lighting.
+    float nx, ny, nz;
+    // SOH [Enhancement] World-space vertex position (object x modelview, camera lives in the projection
+    // matrix). Captured for the actor-shadow pass so geometry can be flattened onto the ground plane.
+    float wx, wy, wz;
 };
 
 struct RawTexMetadata {
@@ -240,6 +254,27 @@ struct RSP {
     float current_lookat_coeffs[2][3]; // lookat_x, lookat_y
     uint8_t current_num_lights;        // includes ambient light
     bool lights_changed;
+
+    // SOH [Enhancement] Toon lighting: the single dominant light chosen for the current object,
+    // recomputed when lights change. World-space direction, light color, and ambient color (0..1).
+    float toon_light_dir[3];
+    float toon_light_color[3];
+    float toon_ambient[3];
+
+    // SOH [Enhancement] Toon lighting: a per-object key light supplied by the game (gSPToonKey),
+    // world-space direction + color. When valid it overrides the renderer's own light averaging so
+    // the game can drive a Wind Waker-style sun/torch key with smooth day-night animation.
+    bool toon_key_valid;
+    float toon_key_dir[3];
+    float toon_key_color[3];
+
+    // SOH [Enhancement] Actor shadow: per-object floor plane (the actual tilted floor polygon the object
+    // is flattened onto, as unit normal xyz + plane constant d, world space) supplied by gSPToonShadow,
+    // and the eased key direction snapshotted when the object armed. The snapshot — not the live
+    // toon_key_dir, which the next object overwrites before this object's deferred shadow flush — keeps
+    // the drop shadow on the same light the cel shading uses.
+    float toon_shadow_size;   // eased 0..1 drop-shadow size for this object (carried in the arm command's w1)
+    float toon_shadow_dir[3]; // key direction captured at arm time, used by the deferred shadow flush
 
     uint32_t geometry_mode;
     int16_t fog_mul, fog_offset;
@@ -293,6 +328,8 @@ struct RDP {
     uint32_t other_mode_l, other_mode_h;
     uint64_t combine_mode;
     bool grayscale;
+    bool toon;        // SOH [Enhancement] toon lighting active for the current draw (set by gSPToon)
+    bool toon_shadow; // SOH [Enhancement] actor shadow armed for the current object (set by gSPToonShadow)
     ShaderMod current_shader;
 
     uint8_t prim_lod_fraction;
@@ -362,6 +399,17 @@ class Interpreter {
     void Destroy();
     void GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY);
     GfxRenderingAPI* GetCurrentRenderingAPI();
+    // SOH [Enhancement] Actor shadow: global look tuning pushed once per frame by the game. alpha is the
+    // core blend strength; minElevation is the floor the key's height-above-the-floor is remapped into
+    // (higher = the light is forced steeper = shorter shadows); taps is the number of accumulation passes
+    // for the soft penumbra; softness scales the per-tap ground offset.
+    void SetToonShadowParams(float alpha, float minElevation, float slabDepth, float slabRise, bool showVolume) {
+        mToonShadowAlpha = alpha;
+        mToonShadowMinElevation = minElevation;
+        mShadowSlabDepth = slabDepth;
+        mShadowSlabRise = slabRise;
+        mShadowShowVolume = showVolume;
+    }
     void StartFrame();
     void RunGuiOnly();
     void Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_replacements);
@@ -409,6 +457,19 @@ class Interpreter {
     void ImportTexture(int i, int tile, bool importReplacement);
     void ImportTextureMask(int i, int tile);
     void CalculateNormalDir(const F3DLight_t*, float coeffs[3]);
+    // SOH [Enhancement] Toon lighting: pick the single dominant light for the current object and
+    // cache its world-space direction / color / ambient in the RSP for the fragment shader.
+    void SelectToonLight();
+
+    // SOH [Enhancement] Actor shadow: project the current object's captured world-space triangles onto
+    // its ground plane along the toon key direction and draw them as flat translucent geometry (reuses
+    // the standard SHADE combine + XLU decal path), accumulated over several offset taps for a soft edge.
+    // Called at each per-object boundary; builds the object's shadow volume and accumulates it for the frame.
+    void FlushToonShadow();
+    // SOH [Enhancement] Actor shadow: draw all volumes accumulated this frame (batched z-fail stencil +
+    // composite), then clear them. Called once per frame at the pre-actor hook so shadows fall only on the
+    // environment (no self-shadow / no shadowing other actors).
+    void RenderShadowVolumes();
 
     void GfxSpMatrix(uint8_t params, const int32_t* addr);
     void GfxSpPopMatrix(uint32_t count);
@@ -495,6 +556,21 @@ class Interpreter {
     float* mBufVbo; // 3 vertices in a triangle and 32 floats per vtx
     size_t mBufVboLen{};
     size_t mBufVboNumTris{};
+    // SOH [Enhancement] Actor shadow: world-space positions of the current object's triangles (9 floats
+    // per tri), accumulated as the object draws and drained by FlushToonShadow at each object boundary.
+    std::vector<float> mShadowVerts;
+    // SOH [Enhancement] Actor shadow: all shadow-volume triangles built this frame (9 floats/tri, outward
+    // wound), drained by RenderShadowVolumes() at the pre-actor hook so shadows fall only on the environment.
+    std::vector<float> mShadowVolumeAccum;
+    std::vector<uint8_t> mShadowVolumeKind; // per accumulated tri: 0 = cap, 1 = wall (only filled for the debug view)
+    // Clip-space transform of mShadowVolumeAccum, computed once per frame in RenderShadowVolumes so the two
+    // stencil passes (and the debug overlay) reuse it instead of re-running the projection per pass.
+    std::vector<LoadedVertex> mShadowXform;
+    float mToonShadowAlpha = 0.5f;        // core blend strength (set per frame by SetToonShadowParams)
+    float mToonShadowMinElevation = 0.6f; // min remapped key height above the floor (bounds shadow length)
+    float mShadowSlabDepth = 40.0f;    // stencil-volume: how far below the feet the slab reaches (ground band)
+    float mShadowSlabRise = 10.0f;     // stencil-volume: how far ABOVE the feet the slab top reaches (uphill)
+    bool mShadowShowVolume = false;    // debug: draw the translucent shadow volume (black caps, blue walls)
     GfxWindowBackend* mWapi = nullptr;
     GfxRenderingAPI* mRapi = nullptr;
 
