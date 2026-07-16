@@ -36,6 +36,7 @@ class Buffer;
 class RenderPipelineState;
 class CommandQueue;
 class Viewport;
+class DepthStencilState; // SOH [Enhancement] cached depth-stencil states (actor shadows / light casting)
 } // namespace MTL
 
 namespace CA {
@@ -142,7 +143,7 @@ struct CoordUniforms {
 
 class GfxRenderingAPIMetal final : public GfxRenderingAPI {
   public:
-    ~GfxRenderingAPIMetal() override = default;
+    ~GfxRenderingAPIMetal() override;
     const char* GetName() override;
     int GetMaxTextureSize() override;
     GfxClipParameters GetClipParameters() override;
@@ -236,6 +237,12 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     int mCurrentFramebuffer;
     size_t mCurrentVertexBufferOffset;
     FilteringMode mCurrentFilterMode = FILTER_THREE_POINT;
+
+    // SOH [Enhancement] Depth-stencil states, created lazily and cached for the device's lifetime.
+    // Metal wants these built at load time, not per draw — and the stencil features (actor shadows,
+    // light casting) change the mode many times per frame, which used to create (and leak) a fresh
+    // driver object on every change. Key: depthTest | depthMask<<1 | zmodeDecal<<2 | stencilMode<<3.
+    MTL::DepthStencilState* mDepthStencilStates[32] = {};
 
     bool mNonUniformThreadgroupSupported;
 };

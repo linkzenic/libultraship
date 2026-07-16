@@ -128,6 +128,16 @@ void GfxRenderingAPIMetal::RenderDrawData(ImDrawData* drawData) {
 
 // MARK: - Metal Graphics Rendering API
 
+GfxRenderingAPIMetal::~GfxRenderingAPIMetal() {
+    // SOH [Enhancement] Release the cached depth-stencil states (see DrawTriangles).
+    for (auto*& state : mDepthStencilStates) {
+        if (state != nullptr) {
+            state->release();
+            state = nullptr;
+        }
+    }
+}
+
 const char* GfxRenderingAPIMetal::GetName() {
     return "Metal";
 }
@@ -428,46 +438,56 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
 
     if (current_framebuffer.mLastDepthTest != mCurrentDepthTest ||
         current_framebuffer.mLastDepthMask != mCurrentDepthMask ||
+        // SOH [Enhancement] The decal flag participates because the depth compare function below
+        // depends on it; without it a decal-only change kept the previous compare function.
+        current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal ||
         current_framebuffer.mLastStencilMode != mStencilMode) { // SOH [Enhancement] world light casting
         current_framebuffer.mLastDepthTest = mCurrentDepthTest;
         current_framebuffer.mLastDepthMask = mCurrentDepthMask;
         current_framebuffer.mLastStencilMode = mStencilMode; // SOH [Enhancement] world light casting
 
-        MTL::DepthStencilDescriptor* depth_descriptor = MTL::DepthStencilDescriptor::alloc()->init();
-        depth_descriptor->setDepthWriteEnabled(mCurrentDepthMask);
-        depth_descriptor->setDepthCompareFunction(
-            mCurrentDepthTest ? (mCurrentZmodeDecal ? MTL::CompareFunctionLessEqual : MTL::CompareFunctionLess)
-                              : MTL::CompareFunctionAlways);
+        // SOH [Enhancement] Depth-stencil states are cached (created lazily, kept for the device's
+        // lifetime): the stencil features flip the mode many times per frame, and creating a fresh
+        // state per change churned a driver object on every flip — and leaked it (newDepthStencilState
+        // returns an owned reference that was never released).
+        uint32_t dsKey = (mCurrentDepthTest ? 1u : 0u) | ((mCurrentDepthMask ? 1u : 0u) << 1) |
+                         ((mCurrentZmodeDecal ? 1u : 0u) << 2) | (((uint32_t)mStencilMode & 3u) << 3);
+        if (mDepthStencilStates[dsKey] == nullptr) {
+            MTL::DepthStencilDescriptor* depth_descriptor = MTL::DepthStencilDescriptor::alloc()->init();
+            depth_descriptor->setDepthWriteEnabled(mCurrentDepthMask);
+            depth_descriptor->setDepthCompareFunction(
+                mCurrentDepthTest ? (mCurrentZmodeDecal ? MTL::CompareFunctionLessEqual : MTL::CompareFunctionLess)
+                                  : MTL::CompareFunctionAlways);
 
-        // SOH [Enhancement] World light casting: stencil light-volume ops (see StencilMode). Off leaves
-        // the descriptor stencil-free, so ordinary draws are unchanged. Front == back ops because face
-        // culling is done game-side (each mask pass draws only back or only front faces).
-        if (mStencilMode != (int)StencilMode::Off) {
-            MTL::StencilDescriptor* stencil = MTL::StencilDescriptor::alloc()->init();
-            stencil->setReadMask(0xFF);
-            stencil->setWriteMask(0xFF);
-            if (mStencilMode == (int)StencilMode::Composite) {
-                stencil->setStencilCompareFunction(MTL::CompareFunctionNotEqual); // ref 0: draw where != 0
-                stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
-                stencil->setDepthFailureOperation(MTL::StencilOperationKeep);
-                stencil->setDepthStencilPassOperation(MTL::StencilOperationZero); // self-clear as it composites
-            } else {
-                stencil->setStencilCompareFunction(MTL::CompareFunctionAlways);
-                stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
-                stencil->setDepthFailureOperation(mStencilMode == (int)StencilMode::VolumeIncr
-                                                      ? MTL::StencilOperationIncrementClamp
-                                                      : MTL::StencilOperationDecrementClamp); // z-fail count
-                stencil->setDepthStencilPassOperation(MTL::StencilOperationKeep);
+            // SOH [Enhancement] World light casting: stencil light-volume ops (see StencilMode). Off leaves
+            // the descriptor stencil-free, so ordinary draws are unchanged. Front == back ops because face
+            // culling is done game-side (each mask pass draws only back or only front faces).
+            if (mStencilMode != (int)StencilMode::Off) {
+                MTL::StencilDescriptor* stencil = MTL::StencilDescriptor::alloc()->init();
+                stencil->setReadMask(0xFF);
+                stencil->setWriteMask(0xFF);
+                if (mStencilMode == (int)StencilMode::Composite) {
+                    stencil->setStencilCompareFunction(MTL::CompareFunctionNotEqual); // ref 0: draw where != 0
+                    stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
+                    stencil->setDepthFailureOperation(MTL::StencilOperationKeep);
+                    stencil->setDepthStencilPassOperation(MTL::StencilOperationZero); // self-clear as it composites
+                } else {
+                    stencil->setStencilCompareFunction(MTL::CompareFunctionAlways);
+                    stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
+                    stencil->setDepthFailureOperation(mStencilMode == (int)StencilMode::VolumeIncr
+                                                          ? MTL::StencilOperationIncrementClamp
+                                                          : MTL::StencilOperationDecrementClamp); // z-fail count
+                    stencil->setDepthStencilPassOperation(MTL::StencilOperationKeep);
+                }
+                depth_descriptor->setFrontFaceStencil(stencil);
+                depth_descriptor->setBackFaceStencil(stencil);
+                stencil->release();
             }
-            depth_descriptor->setFrontFaceStencil(stencil);
-            depth_descriptor->setBackFaceStencil(stencil);
-            stencil->release();
+
+            mDepthStencilStates[dsKey] = mDevice->newDepthStencilState(depth_descriptor);
+            depth_descriptor->release();
         }
-
-        MTL::DepthStencilState* depth_stencil_state = mDevice->newDepthStencilState(depth_descriptor);
-        current_framebuffer.mCommandEncoder->setDepthStencilState(depth_stencil_state);
-
-        depth_descriptor->release();
+        current_framebuffer.mCommandEncoder->setDepthStencilState(mDepthStencilStates[dsKey]);
     }
 
     if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {
@@ -1010,6 +1030,7 @@ void GfxRenderingAPIMetal::ClearFramebuffer(bool color, bool depth) {
     framebuffer.mLastDepthTest = -1;
     framebuffer.mLastDepthMask = -1;
     framebuffer.mLastZmodeDecal = -1;
+    framebuffer.mLastStencilMode = -1; // SOH [Enhancement] world light casting / actor shadows
 }
 
 void GfxRenderingAPIMetal::ResolveMSAAColorBuffer(int fb_id_target, int fb_id_source) {
@@ -1221,6 +1242,7 @@ void GfxRenderingAPIMetal::CopyFramebuffer(int fb_dst_id, int fb_src_id, int src
     source_framebuffer.mLastDepthTest = -1;
     source_framebuffer.mLastDepthMask = -1;
     source_framebuffer.mLastZmodeDecal = -1;
+    source_framebuffer.mLastStencilMode = -1; // SOH [Enhancement] world light casting / actor shadows
 }
 
 void GfxRenderingAPIMetal::GfxRenderingAPIMetal::ReadFramebufferToCPU(int fb_id, uint32_t width, uint32_t height,
