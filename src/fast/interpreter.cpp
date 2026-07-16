@@ -9,6 +9,9 @@
 #include <stdio.h>
 
 #include <any>
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -2482,32 +2485,102 @@ void Interpreter::FlushToonShadow() {
         }
     };
 
-    // Each captured triangle becomes its OWN closed prism (2 caps + 3 walls = 8 tris). This is robust on OoT's
-    // unwelded "triangle soup" meshes (a silhouette-edge optimization that drops interior walls needs shared
-    // edges, which these meshes don't reliably have, so it shattered the shape). The per-prism z-fail counts
-    // still compose into the union (the footprint).
-    for (size_t base = 0; base + 9 <= floatCount; base += 9) {
-        float ax, az, bx, bz, cx, cz;
-        projectXZ(mShadowVerts[base + 0], mShadowVerts[base + 1], mShadowVerts[base + 2], ax, az);
-        projectXZ(mShadowVerts[base + 3], mShadowVerts[base + 4], mShadowVerts[base + 5], bx, bz);
-        projectXZ(mShadowVerts[base + 6], mShadowVerts[base + 7], mShadowVerts[base + 8], cx, cz);
-        if (sizeScale < 1.0f) { // shrink the footprint toward its centroid for the size fade
-            ax = cenX + (ax - cenX) * sizeScale, az = cenZ + (az - cenZ) * sizeScale;
-            bx = cenX + (bx - cenX) * sizeScale, bz = cenZ + (bz - cenZ) * sizeScale;
-            cx = cenX + (cx - cenX) * sizeScale, cz = cenZ + (cz - cenZ) * sizeScale;
-        }
-        const float area = ((bx - ax) * (cz - az)) - ((cx - ax) * (bz - az));
-        if (fabsf(area) < 0.01f) {
+    // Build one closed convex prism from the projected actor silhouette. The previous implementation made a
+    // separate eight-triangle prism for EVERY source triangle. Besides multiplying a detailed actor into tens
+    // of thousands of shadow triangles, overlapping prisms could saturate the 8-bit stencil counter and leave
+    // false shadow fragments. A 2D convex hull is independent of the model's unwelded triangle topology and
+    // normally produces only a few dozen volume triangles even for a high-resolution replacement model.
+    struct ShadowPoint {
+        float x;
+        float z;
+    };
+    std::vector<ShadowPoint> points;
+    points.reserve(vertN);
+    float projectedSumX = 0.0f, projectedSumZ = 0.0f;
+    for (size_t i = 0; i + 3 <= floatCount; i += 3) {
+        float x, z;
+        projectXZ(mShadowVerts[i], mShadowVerts[i + 1], mShadowVerts[i + 2], x, z);
+        if (!std::isfinite(x) || !std::isfinite(z)) {
             continue;
         }
-        const float tA[3] = { ax, slabTop, az }, tB[3] = { bx, slabTop, bz }, tC[3] = { cx, slabTop, cz };
-        const float bA[3] = { ax, slabBottom, az }, bB[3] = { bx, slabBottom, bz }, bC[3] = { cx, slabBottom, cz };
-        const float ccx = (ax + bx + cx) / 3.0f, ccy = (slabTop + slabBottom) * 0.5f, ccz = (az + bz + cz) / 3.0f;
-        pushTri(tA, tB, tC, ccx, ccy, ccz, 0); // top cap
-        pushTri(bA, bB, bC, ccx, ccy, ccz, 0); // bottom cap
-        pushTri(tA, tB, bB, ccx, ccy, ccz, 1), pushTri(tA, bB, bA, ccx, ccy, ccz, 1); // wall a-b
-        pushTri(tB, tC, bC, ccx, ccy, ccz, 1), pushTri(tB, bC, bB, ccx, ccy, ccz, 1); // wall b-c
-        pushTri(tC, tA, bA, ccx, ccy, ccz, 1), pushTri(tC, bA, bC, ccx, ccy, ccz, 1); // wall c-a
+        points.push_back({ x, z });
+        projectedSumX += x;
+        projectedSumZ += z;
+    }
+    if (points.size() < 3) {
+        mShadowVerts.clear();
+        return;
+    }
+
+    // Fade by shrinking the complete footprint toward its projected centroid before finding its hull.
+    const float projectedCenX = projectedSumX / (float)points.size();
+    const float projectedCenZ = projectedSumZ / (float)points.size();
+    if (sizeScale < 1.0f) {
+        for (ShadowPoint& p : points) {
+            p.x = projectedCenX + ((p.x - projectedCenX) * sizeScale);
+            p.z = projectedCenZ + ((p.z - projectedCenZ) * sizeScale);
+        }
+    }
+
+    std::sort(points.begin(), points.end(), [](const ShadowPoint& a, const ShadowPoint& b) {
+        return a.x < b.x || (a.x == b.x && a.z < b.z);
+    });
+    points.erase(std::unique(points.begin(), points.end(), [](const ShadowPoint& a, const ShadowPoint& b) {
+                     return fabsf(a.x - b.x) < 0.001f && fabsf(a.z - b.z) < 0.001f;
+                 }),
+                 points.end());
+    if (points.size() < 3) {
+        mShadowVerts.clear();
+        return;
+    }
+
+    auto cross2D = [](const ShadowPoint& o, const ShadowPoint& a, const ShadowPoint& b) {
+        return ((a.x - o.x) * (b.z - o.z)) - ((a.z - o.z) * (b.x - o.x));
+    };
+    std::vector<ShadowPoint> hull;
+    hull.reserve(points.size() * 2);
+    for (const ShadowPoint& p : points) {
+        while (hull.size() >= 2 && cross2D(hull[hull.size() - 2], hull.back(), p) <= 0.001f) {
+            hull.pop_back();
+        }
+        hull.push_back(p);
+    }
+    const size_t lowerSize = hull.size();
+    for (size_t i = points.size() - 1; i-- > 0;) {
+        const ShadowPoint& p = points[i];
+        while (hull.size() > lowerSize && cross2D(hull[hull.size() - 2], hull.back(), p) <= 0.001f) {
+            hull.pop_back();
+        }
+        hull.push_back(p);
+    }
+    hull.pop_back(); // the monotonic-chain construction repeats the first point
+    if (hull.size() < 3) {
+        mShadowVerts.clear();
+        return;
+    }
+
+    float hullCenX = 0.0f, hullCenZ = 0.0f;
+    for (const ShadowPoint& p : hull) {
+        hullCenX += p.x;
+        hullCenZ += p.z;
+    }
+    hullCenX /= (float)hull.size();
+    hullCenZ /= (float)hull.size();
+    const float volumeCenY = (slabTop + slabBottom) * 0.5f;
+
+    std::vector<std::array<float, 3>> top(hull.size()), bottom(hull.size());
+    for (size_t i = 0; i < hull.size(); i++) {
+        top[i] = { hull[i].x, slabTop, hull[i].z };
+        bottom[i] = { hull[i].x, slabBottom, hull[i].z };
+    }
+    for (size_t i = 1; i + 1 < hull.size(); i++) {
+        pushTri(top[0].data(), top[i].data(), top[i + 1].data(), hullCenX, volumeCenY, hullCenZ, 0);
+        pushTri(bottom[0].data(), bottom[i].data(), bottom[i + 1].data(), hullCenX, volumeCenY, hullCenZ, 0);
+    }
+    for (size_t i = 0; i < hull.size(); i++) {
+        const size_t next = (i + 1) % hull.size();
+        pushTri(top[i].data(), top[next].data(), bottom[next].data(), hullCenX, volumeCenY, hullCenZ, 1);
+        pushTri(top[i].data(), bottom[next].data(), bottom[i].data(), hullCenX, volumeCenY, hullCenZ, 1);
     }
 
     // Safety cap: if the per-frame render hook somehow isn't draining the accumulator, don't grow unbounded.
@@ -2567,7 +2640,15 @@ void Interpreter::RenderShadowVolumes() {
         d.w = (wx * mRsp->P_matrix[0][3]) + (wy * mRsp->P_matrix[1][3]) + (wz * mRsp->P_matrix[2][3]) +
               mRsp->P_matrix[3][3];
         d.u = d.v = 0;
+        // Match normal vertex loading's trivial clip rejection. Shadow volumes can cross or sit behind the
+        // camera; treating every transformed vertex as visible allowed invalid giant triangles to reach the
+        // stencil pass and commonly manifested as a fragment at the top-left edge of the viewport.
         d.clip_rej = 0;
+        if (d.x < -d.w) d.clip_rej |= 1;
+        if (d.x > d.w) d.clip_rej |= 2;
+        if (d.y < -d.w) d.clip_rej |= 4;
+        if (d.y > d.w) d.clip_rej |= 8;
+        if (d.z > d.w) d.clip_rej |= 32;
     }
     // Copy triangle t's three cached verts into the scratch slots GfxSpTri1 reads.
     auto loadTri = [&](size_t t) {
