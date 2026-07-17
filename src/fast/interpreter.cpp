@@ -2822,8 +2822,9 @@ void Interpreter::RenderShadowVolumes() {
     // the measured CPU bottleneck. Instead, resolve+load all render state ONCE per band (draw a single triangle
     // through the normal path with culling off, then discard it — nothing is submitted because its state-change
     // Flushes fire on an empty buffer and we zero the buffer afterward), learn the exact per-vertex VBO layout
-    // from what it wrote, and fill the vertex buffer directly for the rest. We still software-cull per the
-    // active geometry_mode so the two z-fail passes keep the right faces. The capture must rerun each band
+    // from what it wrote, and fill the vertex buffer directly for the rest. The z-fail pass is two-sided
+    // (no culling — the GPU's facing picks increment vs decrement per triangle), so the software cull
+    // below only fires for geometry modes that carry cull bits. The capture must rerun each band
     // because the band's composite re-resolves the pipeline with its own state. mBufVbo is backend-agnostic,
     // so this single interpreter-side change is correct on all three backends.
     size_t shadowStride = 0;                           // floats per vertex (0 = layout unexpected -> fallback)
@@ -2933,13 +2934,14 @@ void Interpreter::RenderShadowVolumes() {
             mBufVboLen = 0, mBufVboNumTris = 0; // discard the setup triangle (re-drawn, culled, in the passes)
         }
 
-        // z-fail mask: back faces increment, front faces decrement -> stencil != 0 where the ground is inside.
-        mRsp->geometry_mode = G_ZBUFFER | cullFront;
+        // z-fail mask, ONE two-sided pass: the GPU's facing picks the op per triangle (wrap-increment
+        // one facing, wrap-decrement the other), so the volume is submitted once with culling off
+        // instead of as a cull-front/cull-back pass pair — half the iteration, VBO fill and draw
+        // calls. Wrap ops + the composite's nonzero test make primitive order and facing polarity
+        // irrelevant; only "opposite ops per facing" matters (see StencilMode::VolumeIncrDecr).
+        mRsp->geometry_mode = G_ZBUFFER;
         Flush();
-        mRapi->SetStencilMode((int)StencilMode::VolumeIncr);
-        drawVolume();
-        mRsp->geometry_mode = G_ZBUFFER | cullBack;
-        mRapi->SetStencilMode((int)StencilMode::VolumeDecr);
+        mRapi->SetStencilMode((int)StencilMode::VolumeIncrDecr);
         drawVolume();
 
         // composite (self-clearing); full-screen clip-space quad, no depth test.

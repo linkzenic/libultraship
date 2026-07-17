@@ -27,6 +27,11 @@ enum class StencilMode {
     VolumeIncr = 1, // mask: stencil += 1 where a volume face fails the depth test (z-fail)
     VolumeDecr = 2, // mask: stencil -= 1 where a volume face fails the depth test (z-fail)
     Composite = 3,  // draw where stencil != 0, zeroing it as it goes (self-clearing composite)
+    // Single two-sided z-fail pass: one facing increments, the other decrements, both WRAPPING.
+    // Wrap + the Composite's nonzero test make the result independent of primitive order AND of which
+    // facing gets which op — only "opposite ops per facing" matters — so the volume can be submitted
+    // once with culling off instead of as a cull-front/cull-back pass pair.
+    VolumeIncrDecr = 4,
 };
 
 // A hash function used to hash a: pair<float, float>

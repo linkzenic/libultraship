@@ -650,7 +650,11 @@ void GfxRenderingAPIOGL::SetUseAlpha(bool use_alpha) {
 }
 
 void GfxRenderingAPIOGL::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
-    if (mCurrentDepthTest != mLastDepthTest || mCurrentDepthMask != mLastDepthMask) {
+    // SOH [Enhancement] The decal flag participates because the depth func below depends on it; without
+    // it a decal-only change kept the previous compare function (mLastZmodeDecal itself is updated by
+    // the polygon-offset block further down, so it is only TESTED here, not assigned).
+    if (mCurrentDepthTest != mLastDepthTest || mCurrentDepthMask != mLastDepthMask ||
+        mCurrentZmodeDecal != mLastZmodeDecal) {
         mLastDepthTest = mCurrentDepthTest;
         mLastDepthMask = mCurrentDepthMask;
 
@@ -663,21 +667,31 @@ void GfxRenderingAPIOGL::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size
         }
     }
 
-    // SOH [Enhancement] World light casting: stencil light-volume ops (see StencilMode). Off disables the
-    // stencil test, so ordinary draws are unaffected. Applied each draw (the GL state calls are cheap);
-    // face culling is CPU-side, so a single op set covers whichever faces the mask pass draws.
-    if (mStencilMode == (int)StencilMode::Off) {
-        glDisable(GL_STENCIL_TEST);
-    } else {
-        glEnable(GL_STENCIL_TEST);
-        glStencilMask(0xFF);
-        if (mStencilMode == (int)StencilMode::Composite) {
-            glStencilFunc(GL_NOTEQUAL, 0, 0xFF);    // draw where stencil != 0
-            glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO); // self-clear as it composites
+    // SOH [Enhancement] World light casting / actor shadows: stencil volume ops (see StencilMode). Off
+    // disables the stencil test, so ordinary draws are unaffected. Change-detected like the neighbouring
+    // states: the mode is Off for almost every draw, and re-issuing the GL calls per draw added up.
+    if (mStencilMode != mLastStencilMode) {
+        mLastStencilMode = mStencilMode;
+        if (mStencilMode == (int)StencilMode::Off) {
+            glDisable(GL_STENCIL_TEST);
         } else {
-            glStencilFunc(GL_ALWAYS, 0, 0xFF);
-            // z-fail count: increment/decrement where the depth test fails (dpfail)
-            glStencilOp(GL_KEEP, mStencilMode == (int)StencilMode::VolumeIncr ? GL_INCR : GL_DECR, GL_KEEP);
+            glEnable(GL_STENCIL_TEST);
+            glStencilMask(0xFF);
+            if (mStencilMode == (int)StencilMode::Composite) {
+                glStencilFunc(GL_NOTEQUAL, 0, 0xFF);    // draw where stencil != 0
+                glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO); // self-clear as it composites
+            } else if (mStencilMode == (int)StencilMode::VolumeIncrDecr) {
+                // Two-sided single pass: opposite WRAP ops per facing (order/polarity independent —
+                // see the StencilMode enum note).
+                glStencilFunc(GL_ALWAYS, 0, 0xFF);
+                glStencilOpSeparate(GL_BACK, GL_KEEP, GL_INCR_WRAP, GL_KEEP);
+                glStencilOpSeparate(GL_FRONT, GL_KEEP, GL_DECR_WRAP, GL_KEEP);
+            } else {
+                glStencilFunc(GL_ALWAYS, 0, 0xFF);
+                // z-fail count: increment/decrement where the depth test fails (dpfail); one op set for
+                // both facings because these passes cull CPU-side. glStencilOp resets any separate ops.
+                glStencilOp(GL_KEEP, mStencilMode == (int)StencilMode::VolumeIncr ? GL_INCR : GL_DECR, GL_KEEP);
+            }
         }
     }
 
@@ -765,6 +779,7 @@ void GfxRenderingAPIOGL::OnResize() {
 
 void GfxRenderingAPIOGL::StartFrame() {
     mFrameCount++;
+    mLastStencilMode = -1; // SOH [Enhancement] re-apply stencil state on the frame's first draw
 }
 
 void GfxRenderingAPIOGL::EndFrame() {

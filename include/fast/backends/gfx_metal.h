@@ -241,8 +241,9 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     // SOH [Enhancement] Depth-stencil states, created lazily and cached for the device's lifetime.
     // Metal wants these built at load time, not per draw — and the stencil features (actor shadows,
     // light casting) change the mode many times per frame, which used to create (and leak) a fresh
-    // driver object on every change. Key: depthTest | depthMask<<1 | zmodeDecal<<2 | stencilMode<<3.
-    MTL::DepthStencilState* mDepthStencilStates[32] = {};
+    // driver object on every change. Key: depthTest | depthMask<<1 | zmodeDecal<<2 | stencilMode<<3
+    // (three stencil bits — StencilMode currently reaches 4, VolumeIncrDecr).
+    MTL::DepthStencilState* mDepthStencilStates[64] = {};
 
     bool mNonUniformThreadgroupSupported;
 };
