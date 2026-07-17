@@ -228,6 +228,7 @@ void GfxRenderingAPIDX11::Init() {
         mLastDepthTest = -1;
         mLastDepthMask = -1;
         mLastZmodeDecal = -1;
+        mLastStencilMode = -1; // SOH [Enhancement] world light casting / actor shadows
         mLastPrimitaveTopology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
     });
 
@@ -667,59 +668,66 @@ void GfxRenderingAPIDX11::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, siz
         mLastDepthMask = mCurrentDepthMask;
         mLastStencilMode = mStencilMode;
 
-        mDepthStencilState.Reset();
+        // SOH [Enhancement] Depth-stencil states are cached (created lazily, kept for the device's
+        // lifetime): the stencil features flip the mode many times per frame, and re-running
+        // CreateDepthStencilState on every flip churned a driver object per change. Same key scheme as
+        // the Metal backend's cache.
+        uint32_t dsKey = (mCurrentDepthTest ? 1u : 0u) | ((mCurrentDepthMask ? 1u : 0u) << 1) |
+                         ((mCurrentZmodeDecal ? 1u : 0u) << 2) | (((uint32_t)mStencilMode & 7u) << 3);
+        if (mDepthStencilStates[dsKey] == nullptr) {
+            D3D11_DEPTH_STENCIL_DESC depth_stencil_desc;
+            ZeroMemory(&depth_stencil_desc, sizeof(D3D11_DEPTH_STENCIL_DESC));
 
-        D3D11_DEPTH_STENCIL_DESC depth_stencil_desc;
-        ZeroMemory(&depth_stencil_desc, sizeof(D3D11_DEPTH_STENCIL_DESC));
+            depth_stencil_desc.DepthEnable = mCurrentDepthTest || mCurrentDepthMask;
+            depth_stencil_desc.DepthWriteMask =
+                mCurrentDepthMask ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
+            depth_stencil_desc.DepthFunc =
+                mCurrentDepthTest ? (mCurrentZmodeDecal ? D3D11_COMPARISON_LESS_EQUAL : D3D11_COMPARISON_LESS)
+                                  : D3D11_COMPARISON_ALWAYS;
 
-        depth_stencil_desc.DepthEnable = mCurrentDepthTest || mCurrentDepthMask;
-        depth_stencil_desc.DepthWriteMask =
-            mCurrentDepthMask ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
-        depth_stencil_desc.DepthFunc = mCurrentDepthTest
-                                           ? (mCurrentZmodeDecal ? D3D11_COMPARISON_LESS_EQUAL : D3D11_COMPARISON_LESS)
-                                           : D3D11_COMPARISON_ALWAYS;
+            // SOH [Enhancement] World light casting / actor shadows stencil volume state. Off leaves the
+            // stencil disabled (rendering unchanged). The single-sided mask modes (z-fail) use identical
+            // front/back ops because those passes cull game-side; VolumeIncrDecr is the two-sided single
+            // pass — opposite WRAP ops per facing (D3D11_STENCIL_OP_INCR/DECR wrap; the _SAT variants
+            // clamp), order/polarity independent. The composite draws where stencil != 0 and zeroes it as
+            // it goes (self-clearing).
+            if (mStencilMode == (int)StencilMode::Off) {
+                depth_stencil_desc.StencilEnable = false;
+            } else {
+                depth_stencil_desc.StencilEnable = true;
+                depth_stencil_desc.StencilReadMask = 0xFF;
+                depth_stencil_desc.StencilWriteMask = 0xFF;
 
-        // SOH [Enhancement] World light casting / actor shadows stencil volume state. Off leaves the
-        // stencil disabled (rendering unchanged). The single-sided mask modes (z-fail) use identical
-        // front/back ops because those passes cull game-side; VolumeIncrDecr is the two-sided single
-        // pass — opposite WRAP ops per facing (D3D11_STENCIL_OP_INCR/DECR wrap; the _SAT variants
-        // clamp), order/polarity independent. The composite draws where stencil != 0 and zeroes it as
-        // it goes (self-clearing).
-        if (mStencilMode == (int)StencilMode::Off) {
-            depth_stencil_desc.StencilEnable = false;
-        } else {
-            depth_stencil_desc.StencilEnable = true;
-            depth_stencil_desc.StencilReadMask = 0xFF;
-            depth_stencil_desc.StencilWriteMask = 0xFF;
-
-            D3D11_DEPTH_STENCILOP_DESC op;
-            op.StencilFailOp = D3D11_STENCIL_OP_KEEP;
-            if (mStencilMode == (int)StencilMode::VolumeIncr) {
-                op.StencilDepthFailOp = D3D11_STENCIL_OP_INCR_SAT;
-                op.StencilPassOp = D3D11_STENCIL_OP_KEEP;
-                op.StencilFunc = D3D11_COMPARISON_ALWAYS;
-            } else if (mStencilMode == (int)StencilMode::VolumeDecr) {
-                op.StencilDepthFailOp = D3D11_STENCIL_OP_DECR_SAT;
-                op.StencilPassOp = D3D11_STENCIL_OP_KEEP;
-                op.StencilFunc = D3D11_COMPARISON_ALWAYS;
-            } else if (mStencilMode == (int)StencilMode::VolumeIncrDecr) {
-                op.StencilDepthFailOp = D3D11_STENCIL_OP_INCR; // wrap
-                op.StencilPassOp = D3D11_STENCIL_OP_KEEP;
-                op.StencilFunc = D3D11_COMPARISON_ALWAYS;
-            } else { // Composite: draw where stencil != ref(0), zeroing it
-                op.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
-                op.StencilPassOp = D3D11_STENCIL_OP_ZERO;
-                op.StencilFunc = D3D11_COMPARISON_NOT_EQUAL;
+                D3D11_DEPTH_STENCILOP_DESC op;
+                op.StencilFailOp = D3D11_STENCIL_OP_KEEP;
+                if (mStencilMode == (int)StencilMode::VolumeIncr) {
+                    op.StencilDepthFailOp = D3D11_STENCIL_OP_INCR_SAT;
+                    op.StencilPassOp = D3D11_STENCIL_OP_KEEP;
+                    op.StencilFunc = D3D11_COMPARISON_ALWAYS;
+                } else if (mStencilMode == (int)StencilMode::VolumeDecr) {
+                    op.StencilDepthFailOp = D3D11_STENCIL_OP_DECR_SAT;
+                    op.StencilPassOp = D3D11_STENCIL_OP_KEEP;
+                    op.StencilFunc = D3D11_COMPARISON_ALWAYS;
+                } else if (mStencilMode == (int)StencilMode::VolumeIncrDecr) {
+                    op.StencilDepthFailOp = D3D11_STENCIL_OP_INCR; // wrap
+                    op.StencilPassOp = D3D11_STENCIL_OP_KEEP;
+                    op.StencilFunc = D3D11_COMPARISON_ALWAYS;
+                } else { // Composite: draw where stencil != ref(0), zeroing it
+                    op.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
+                    op.StencilPassOp = D3D11_STENCIL_OP_ZERO;
+                    op.StencilFunc = D3D11_COMPARISON_NOT_EQUAL;
+                }
+                depth_stencil_desc.FrontFace = op;
+                depth_stencil_desc.BackFace = op;
+                if (mStencilMode == (int)StencilMode::VolumeIncrDecr) {
+                    depth_stencil_desc.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_DECR; // wrap
+                }
             }
-            depth_stencil_desc.FrontFace = op;
-            depth_stencil_desc.BackFace = op;
-            if (mStencilMode == (int)StencilMode::VolumeIncrDecr) {
-                depth_stencil_desc.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_DECR; // wrap
-            }
+
+            ThrowIfFailed(
+                mDevice->CreateDepthStencilState(&depth_stencil_desc, mDepthStencilStates[dsKey].GetAddressOf()));
         }
-
-        ThrowIfFailed(mDevice->CreateDepthStencilState(&depth_stencil_desc, mDepthStencilState.GetAddressOf()));
-        mContext->OMSetDepthStencilState(mDepthStencilState.Get(), 0);
+        mContext->OMSetDepthStencilState(mDepthStencilStates[dsKey].Get(), 0);
     }
 
     if (mLastZmodeDecal != mCurrentZmodeDecal) {
