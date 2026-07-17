@@ -2549,17 +2549,24 @@ void Interpreter::FlushToonShadow() {
         mShadowVerts.clear();
         return;
     }
-    // Pass 2: rasterize, conservatively, at 2× the output resolution. Mark each triangle's three vertex
-    // sub-cells (so sub-cell triangles still register) plus every sub-cell in its bounding box whose CENTRE
-    // lies within half a sub-cell-diagonal of the triangle (signed edge distance ≥ −margin). The margin
-    // matters: a centre exactly on the crack between two adjacent triangles can be float-marginally outside
-    // BOTH, and an exact centre-in-triangle test then leaves a pinhole. The margin closes cracks by
-    // construction, at the cost of dilating the footprint by up to half a sub-cell.
-    const float rCellW = cellW * 0.5f, rCellH = cellH * 0.5f;
+    // Pass 2: rasterize, conservatively. Mark each triangle's three vertex cells (so sub-cell triangles
+    // still register) plus every cell in its bounding box whose CENTRE lies within half a cell-diagonal
+    // of the triangle (signed edge distance ≥ −margin). The margin matters: a centre exactly on the
+    // crack between two adjacent triangles can be float-marginally outside BOTH, and an exact
+    // centre-in-triangle test then leaves a pinhole. The margin closes cracks by construction, at the
+    // cost of dilating the footprint by up to half a cell.
+    //
+    // Resolution: the 2× raster only exists to give each output cell a 0–4 sub-cell coverage count for
+    // the soft-edge bands. EdgeSoftness 0 (hard edge) needs no counts — any hit is core — so it
+    // rasterizes at the output resolution directly, a quarter of the cell tests.
+    const int softness = std::clamp(mShadowEdgeSoftness, 0, kShadowBands - 1);
+    const int rScale = (softness == 0) ? 1 : 2;
+    const int rSize = kShadowGridSize * rScale;
+    const float rCellW = cellW / (float)rScale, rCellH = cellH / (float)rScale;
     const float margin = 0.5f * sqrtf((rCellW * rCellW) + (rCellH * rCellH));
-    auto rCellX = [&](float x) { return std::clamp((int)((x - minX) / rCellW), 0, kShadowRasterSize - 1); };
-    auto rCellZ = [&](float z) { return std::clamp((int)((z - minZ) / rCellH), 0, kShadowRasterSize - 1); };
-    uint64_t raster[kShadowRasterSize][kShadowRasterWords] = {};
+    auto rCellX = [&](float x) { return std::clamp((int)((x - minX) / rCellW), 0, rSize - 1); };
+    auto rCellZ = [&](float z) { return std::clamp((int)((z - minZ) / rCellH), 0, rSize - 1); };
+    uint64_t raster[kShadowRasterSize][kShadowRasterWords] = {}; // sized for 2×; hard edge uses a quarter
     auto rasterSet = [&](int gz, int gx) { raster[gz][gx >> 6] |= 1ull << (gx & 63); };
     for (size_t base = 0; base + 9 <= floatCount; base += 9) {
         float ax, az, bx, bz, cx, cz;
@@ -2602,32 +2609,41 @@ void Interpreter::FlushToonShadow() {
 
     // Pass 3: downsample each output cell's 2×2 sub-cells to a coverage count (0–4) and assign disjoint
     // opacity bands (band alphas step down in RenderShadowVolumes; nothing double-darkens):
-    //   EdgeSoftness 0: any coverage → full opacity (hard edge).
+    //   EdgeSoftness 0: any coverage → full opacity (hard edge) — raster is already at output
+    //                   resolution, so its rows ARE the core band, no downsample.
     //   EdgeSoftness 1: full coverage → core; partial coverage → half opacity. The partially-covered cells
     //                   are exactly the silhouette's staircase, so this reads as an anti-aliased edge.
     //   EdgeSoftness 2: full → core; 2–3 sub-cells → 2/3; 1 sub-cell → 1/3, plus a one-cell halo outside
     //                   the footprint at 1/3 — a finer ramp and a slightly wider fringe.
-    const int softness = std::clamp(mShadowEdgeSoftness, 0, kShadowBands - 1);
     uint64_t bandRows[kShadowBands][kShadowGridSize][kShadowGridWords] = {};
     uint64_t occupied[kShadowGridSize][kShadowGridWords] = {};
-    for (int gz = 0; gz < kShadowGridSize; gz++) {
-        const uint64_t* r0 = raster[gz * 2];
-        const uint64_t* r1 = raster[(gz * 2) + 1];
-        for (int gx = 0; gx < kShadowGridSize; gx++) {
-            const int sx = gx * 2;
-            const int cov = (int)((r0[sx >> 6] >> (sx & 63)) & 1ull) + (int)((r0[(sx + 1) >> 6] >> ((sx + 1) & 63)) & 1ull) +
-                            (int)((r1[sx >> 6] >> (sx & 63)) & 1ull) + (int)((r1[(sx + 1) >> 6] >> ((sx + 1) & 63)) & 1ull);
-            if (cov == 0) {
-                continue;
+    if (rScale == 1) {
+        for (int gz = 0; gz < kShadowGridSize; gz++) {
+            for (int i = 0; i < kShadowGridWords; i++) {
+                occupied[gz][i] = raster[gz][i];
+                bandRows[0][gz][i] = raster[gz][i];
             }
-            occupied[gz][gx >> 6] |= 1ull << (gx & 63);
-            int band = 0;
-            if (softness == 1) {
-                band = (cov == 4) ? 0 : 1;
-            } else if (softness >= 2) {
-                band = (cov == 4) ? 0 : ((cov >= 2) ? 1 : 2);
+        }
+    } else {
+        for (int gz = 0; gz < kShadowGridSize; gz++) {
+            const uint64_t* r0 = raster[gz * 2];
+            const uint64_t* r1 = raster[(gz * 2) + 1];
+            for (int gx = 0; gx < kShadowGridSize; gx++) {
+                const int sx = gx * 2;
+                const int cov = (int)((r0[sx >> 6] >> (sx & 63)) & 1ull) + (int)((r0[(sx + 1) >> 6] >> ((sx + 1) & 63)) & 1ull) +
+                                (int)((r1[sx >> 6] >> (sx & 63)) & 1ull) + (int)((r1[(sx + 1) >> 6] >> ((sx + 1) & 63)) & 1ull);
+                if (cov == 0) {
+                    continue;
+                }
+                occupied[gz][gx >> 6] |= 1ull << (gx & 63);
+                int band = 0;
+                if (softness == 1) {
+                    band = (cov == 4) ? 0 : 1;
+                } else if (softness >= 2) {
+                    band = (cov == 4) ? 0 : ((cov >= 2) ? 1 : 2);
+                }
+                bandRows[band][gz][gx >> 6] |= 1ull << (gx & 63);
             }
-            bandRows[band][gz][gx >> 6] |= 1ull << (gx & 63);
         }
     }
     if (softness >= 2) {
@@ -2645,24 +2661,59 @@ void Interpreter::FlushToonShadow() {
         }
     }
 
-    // Pass 4: one box (2 caps + 4 walls = 12 tris) per run of occupied cells in each row, per band.
+    // Pass 4: one box (2 caps + 4 wall quads) per maximal RECTANGLE of occupied cells, per band. A
+    // rectangle is a maximal horizontal run repeated IDENTICALLY across consecutive rows. Identical-run
+    // merging preserves the invariant the x walls rely on (nothing in any merged row abuts the run's
+    // ends — an abutting cell would have made that row's maximal run differ, stopping the merge) while
+    // cutting the emitted triangles several-fold on typical blob footprints: a silhouette's edge slope
+    // is below one cell per row for most rows, so those rows carry identical runs and merge.
     auto bandTest = [&](int band, int gz, int gx) -> bool {
         return ((bandRows[band][gz][gx >> 6] >> (gx & 63)) & 1ull) != 0;
     };
+    // Consumption tracker: a rectangle removes each claimed run WHOLE, so `rem` always holds a subset
+    // of the original maximal runs, intact — which is what makes the exact-run test below sound. The
+    // z-wall neighbour tests keep consulting bandRows (the full occupancy), not rem.
+    uint64_t rem[kShadowGridSize][kShadowGridWords];
     for (int band = 0; band < kShadowBands; band++) {
+        memcpy(rem, bandRows[band], sizeof(rem));
+        auto remTest = [&](int gz, int gx) -> bool { return ((rem[gz][gx >> 6] >> (gx & 63)) & 1ull) != 0; };
+        auto remClearRun = [&](int gz, int x0, int x1) {
+            for (int gx = x0; gx < x1; gx++) {
+                rem[gz][gx >> 6] &= ~(1ull << (gx & 63));
+            }
+        };
+        // Does row gz still contain EXACTLY the maximal run [x0,x1)?
+        auto rowRunMatches = [&](int gz, int x0, int x1) -> bool {
+            if ((x0 > 0 && remTest(gz, x0 - 1)) || (x1 < kShadowGridSize && remTest(gz, x1))) {
+                return false; // longer run here — not identical
+            }
+            for (int gx = x0; gx < x1; gx++) {
+                if (!remTest(gz, gx)) {
+                    return false;
+                }
+            }
+            return true;
+        };
         for (int gz = 0; gz < kShadowGridSize; gz++) {
             int gx = 0;
             while (gx < kShadowGridSize) {
-                if (!bandTest(band, gz, gx)) {
+                if (!remTest(gz, gx)) {
                     gx++;
                     continue;
                 }
                 const int runStart = gx;
-                while (gx < kShadowGridSize && bandTest(band, gz, gx)) {
+                while (gx < kShadowGridSize && remTest(gz, gx)) {
                     gx++;
                 }
+                remClearRun(gz, runStart, gx);
+                // Grow the rectangle downward while the run repeats exactly, consuming as it goes.
+                int zEnd = gz + 1;
+                while (zEnd < kShadowGridSize && rowRunMatches(zEnd, runStart, gx)) {
+                    remClearRun(zEnd, runStart, gx);
+                    zEnd++;
+                }
                 const float x0 = minX + (runStart * cellW), x1 = minX + (gx * cellW);
-                const float z0 = minZ + (gz * cellH), z1 = minZ + ((gz + 1) * cellH);
+                const float z0 = minZ + (gz * cellH), z1 = minZ + (zEnd * cellH);
                 const float ccx = (x0 + x1) * 0.5f, ccy = (slabTop + slabBottom) * 0.5f, ccz = (z0 + z1) * 0.5f;
                 auto quad = [&](const float* a, const float* b, const float* c, const float* d, uint8_t kind) {
                     pushTri(band, a, b, c, ccx, ccy, ccz, kind), pushTri(band, a, c, d, ccx, ccy, ccz, kind);
@@ -2673,13 +2724,13 @@ void Interpreter::FlushToonShadow() {
                 const float b11[3] = { x1, slabBottom, z1 }, b01[3] = { x0, slabBottom, z1 };
                 quad(t00, t10, t11, t01, 0); // top cap
                 quad(b00, b10, b11, b01, 0); // bottom cap
-                quad(t01, t00, b00, b01, 1); // wall x0 (run ends never abut a same-row box)
+                quad(t01, t00, b00, b01, 1); // wall x0 (nothing abuts the run ends in any merged row)
                 quad(t10, t11, b11, b10, 1); // wall x1
-                // z walls: only the segments where the neighbouring row's cell (in the SAME band) is
-                // unoccupied. Abutting boxes' coincident opposite walls cancel in the final stencil count
-                // anyway, but they still pile up in the increment pass before the decrements land — skipping
-                // them keeps pass-1 peaks proportional to the region's OUTLINE crossings instead of the
-                // number of boxes a grazing view ray happens to cross.
+                // z walls at the rectangle's first/last row only: the segments where the neighbouring
+                // row's cell (in the SAME band) is unoccupied. Abutting geometry's coincident opposite
+                // walls would cancel in the final stencil count anyway, but they still pile up in the
+                // increment pass before the decrements land — emitting only outline segments keeps
+                // pass-1 peaks proportional to the region's OUTLINE crossings.
                 auto zWallSegments = [&](int neighborGz, float zw) {
                     const bool haveNeighbor = (neighborGz >= 0) && (neighborGz < kShadowGridSize);
                     int sx = runStart;
@@ -2699,7 +2750,7 @@ void Interpreter::FlushToonShadow() {
                     }
                 };
                 zWallSegments(gz - 1, z0);
-                zWallSegments(gz + 1, z1);
+                zWallSegments(zEnd, z1);
             }
         }
     }
