@@ -147,7 +147,11 @@ class GfxRenderingAPIDX11 final : public GfxRenderingAPI {
     uint32_t mMsaaNumQualityLevels[D3D11_MAX_MULTISAMPLE_SAMPLE_COUNT];
 
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> mRasterizerState;
-    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> mDepthStencilState;
+    // SOH [Enhancement] Depth-stencil states, created lazily and cached for the device's lifetime (the
+    // stencil features flip the mode many times per frame, and each flip used to re-run
+    // CreateDepthStencilState). Key: depthTest | depthMask<<1 | zmodeDecal<<2 | stencilMode<<3 — same
+    // scheme as the Metal backend's cache.
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> mDepthStencilStates[64];
     int mLastStencilMode = -1; // SOH [Enhancement] world light casting: cache tracker for mStencilMode
     Microsoft::WRL::ComPtr<ID3D11Buffer> mVertexBuffer;
     Microsoft::WRL::ComPtr<ID3D11Buffer> mPerFrameCb;
