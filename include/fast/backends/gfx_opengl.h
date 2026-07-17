@@ -123,6 +123,9 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
     int8_t mLastActiveTexture = -1;
     int8_t mLastBlendEnabled = -1;
     int8_t mLastScissorEnabled = -1;
+    // SOH [Enhancement] world light casting / actor shadows: change tracker for mStencilMode (reset
+    // each frame — ImGui's GL backend touches stencil state between our frames).
+    int mLastStencilMode = -1;
 
     std::map<std::pair<uint64_t, uint32_t>, ShaderProgram> mShaderProgramPool;
     ShaderProgram* mCurrentShaderProgram;

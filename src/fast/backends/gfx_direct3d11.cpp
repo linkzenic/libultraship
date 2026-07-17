@@ -658,9 +658,11 @@ void GfxRenderingAPIDX11::SetUseAlpha(bool use_alpha) {
 
 void GfxRenderingAPIDX11::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
 
-    // SOH [Enhancement] World light casting: also rebuild when the stencil mode changes.
+    // SOH [Enhancement] World light casting: also rebuild when the stencil mode changes. The decal
+    // flag participates because DepthFunc below depends on it; without it a decal-only change kept the
+    // previous compare function (mLastZmodeDecal itself is updated by the rasterizer block further down).
     if (mLastDepthTest != mCurrentDepthTest || mLastDepthMask != mCurrentDepthMask ||
-        mLastStencilMode != mStencilMode) {
+        mLastZmodeDecal != mCurrentZmodeDecal || mLastStencilMode != mStencilMode) {
         mLastDepthTest = mCurrentDepthTest;
         mLastDepthMask = mCurrentDepthMask;
         mLastStencilMode = mStencilMode;
@@ -677,11 +679,12 @@ void GfxRenderingAPIDX11::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, siz
                                            ? (mCurrentZmodeDecal ? D3D11_COMPARISON_LESS_EQUAL : D3D11_COMPARISON_LESS)
                                            : D3D11_COMPARISON_ALWAYS;
 
-        // SOH [Enhancement] World light casting stencil light-volume state. Off leaves the stencil
-        // disabled (rendering unchanged). The mask modes (z-fail) increment/decrement where a volume face
-        // is occluded by the scene; the composite mode draws where stencil != 0 and zeroes it as it goes
-        // (self-clearing). Front and back ops are identical because face culling is selected game-side, so
-        // only one face type is drawn per pass.
+        // SOH [Enhancement] World light casting / actor shadows stencil volume state. Off leaves the
+        // stencil disabled (rendering unchanged). The single-sided mask modes (z-fail) use identical
+        // front/back ops because those passes cull game-side; VolumeIncrDecr is the two-sided single
+        // pass — opposite WRAP ops per facing (D3D11_STENCIL_OP_INCR/DECR wrap; the _SAT variants
+        // clamp), order/polarity independent. The composite draws where stencil != 0 and zeroes it as
+        // it goes (self-clearing).
         if (mStencilMode == (int)StencilMode::Off) {
             depth_stencil_desc.StencilEnable = false;
         } else {
@@ -699,6 +702,10 @@ void GfxRenderingAPIDX11::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, siz
                 op.StencilDepthFailOp = D3D11_STENCIL_OP_DECR_SAT;
                 op.StencilPassOp = D3D11_STENCIL_OP_KEEP;
                 op.StencilFunc = D3D11_COMPARISON_ALWAYS;
+            } else if (mStencilMode == (int)StencilMode::VolumeIncrDecr) {
+                op.StencilDepthFailOp = D3D11_STENCIL_OP_INCR; // wrap
+                op.StencilPassOp = D3D11_STENCIL_OP_KEEP;
+                op.StencilFunc = D3D11_COMPARISON_ALWAYS;
             } else { // Composite: draw where stencil != ref(0), zeroing it
                 op.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
                 op.StencilPassOp = D3D11_STENCIL_OP_ZERO;
@@ -706,6 +713,9 @@ void GfxRenderingAPIDX11::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, siz
             }
             depth_stencil_desc.FrontFace = op;
             depth_stencil_desc.BackFace = op;
+            if (mStencilMode == (int)StencilMode::VolumeIncrDecr) {
+                depth_stencil_desc.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_DECR; // wrap
+            }
         }
 
         ThrowIfFailed(mDevice->CreateDepthStencilState(&depth_stencil_desc, mDepthStencilState.GetAddressOf()));

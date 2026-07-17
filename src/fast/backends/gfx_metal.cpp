@@ -451,7 +451,7 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
         // state per change churned a driver object on every flip — and leaked it (newDepthStencilState
         // returns an owned reference that was never released).
         uint32_t dsKey = (mCurrentDepthTest ? 1u : 0u) | ((mCurrentDepthMask ? 1u : 0u) << 1) |
-                         ((mCurrentZmodeDecal ? 1u : 0u) << 2) | (((uint32_t)mStencilMode & 3u) << 3);
+                         ((mCurrentZmodeDecal ? 1u : 0u) << 2) | (((uint32_t)mStencilMode & 7u) << 3);
         if (mDepthStencilStates[dsKey] == nullptr) {
             MTL::DepthStencilDescriptor* depth_descriptor = MTL::DepthStencilDescriptor::alloc()->init();
             depth_descriptor->setDepthWriteEnabled(mCurrentDepthMask);
@@ -459,27 +459,42 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
                 mCurrentDepthTest ? (mCurrentZmodeDecal ? MTL::CompareFunctionLessEqual : MTL::CompareFunctionLess)
                                   : MTL::CompareFunctionAlways);
 
-            // SOH [Enhancement] World light casting: stencil light-volume ops (see StencilMode). Off leaves
-            // the descriptor stencil-free, so ordinary draws are unchanged. Front == back ops because face
-            // culling is done game-side (each mask pass draws only back or only front faces).
+            // SOH [Enhancement] World light casting / actor shadows: stencil volume ops (see StencilMode).
+            // Off leaves the descriptor stencil-free, so ordinary draws are unchanged. The single-sided
+            // modes use front == back ops (face culling is done game-side); VolumeIncrDecr is the
+            // two-sided single pass — opposite WRAP ops per facing, order/polarity independent.
             if (mStencilMode != (int)StencilMode::Off) {
                 MTL::StencilDescriptor* stencil = MTL::StencilDescriptor::alloc()->init();
                 stencil->setReadMask(0xFF);
                 stencil->setWriteMask(0xFF);
+                stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
                 if (mStencilMode == (int)StencilMode::Composite) {
                     stencil->setStencilCompareFunction(MTL::CompareFunctionNotEqual); // ref 0: draw where != 0
-                    stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
                     stencil->setDepthFailureOperation(MTL::StencilOperationKeep);
                     stencil->setDepthStencilPassOperation(MTL::StencilOperationZero); // self-clear as it composites
                 } else {
                     stencil->setStencilCompareFunction(MTL::CompareFunctionAlways);
-                    stencil->setStencilFailureOperation(MTL::StencilOperationKeep);
-                    stencil->setDepthFailureOperation(mStencilMode == (int)StencilMode::VolumeIncr
-                                                          ? MTL::StencilOperationIncrementClamp
-                                                          : MTL::StencilOperationDecrementClamp); // z-fail count
+                    stencil->setDepthFailureOperation(mStencilMode == (int)StencilMode::VolumeDecr
+                                                          ? MTL::StencilOperationDecrementClamp
+                                                          : MTL::StencilOperationIncrementClamp); // z-fail count
                     stencil->setDepthStencilPassOperation(MTL::StencilOperationKeep);
                 }
-                depth_descriptor->setFrontFaceStencil(stencil);
+                if (mStencilMode == (int)StencilMode::VolumeIncrDecr) {
+                    // Two-sided: back faces wrap-increment (set below on the shared descriptor), front
+                    // faces wrap-decrement on their own descriptor.
+                    stencil->setDepthFailureOperation(MTL::StencilOperationIncrementWrap);
+                    MTL::StencilDescriptor* front = MTL::StencilDescriptor::alloc()->init();
+                    front->setReadMask(0xFF);
+                    front->setWriteMask(0xFF);
+                    front->setStencilCompareFunction(MTL::CompareFunctionAlways);
+                    front->setStencilFailureOperation(MTL::StencilOperationKeep);
+                    front->setDepthFailureOperation(MTL::StencilOperationDecrementWrap);
+                    front->setDepthStencilPassOperation(MTL::StencilOperationKeep);
+                    depth_descriptor->setFrontFaceStencil(front);
+                    front->release();
+                } else {
+                    depth_descriptor->setFrontFaceStencil(stencil);
+                }
                 depth_descriptor->setBackFaceStencil(stencil);
                 stencil->release();
             }
