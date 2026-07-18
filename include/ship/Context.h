@@ -44,6 +44,9 @@ class Context {
     static std::string GetPathRelativeToAppDirectory(const std::string path, std::string appName = "");
     static std::string GetPathRelativeToAppBundle(const std::string path);
     static std::string LocateFileAcrossAppDirs(const std::string path, std::string appName = "");
+#if defined(__ANDROID__)
+    static void SetAndroidDataRootPath(const std::string& path);
+#endif
 
     Context(std::string name, std::string shortName, std::string configFilePath);
     ~Context();

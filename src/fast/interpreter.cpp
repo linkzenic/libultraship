@@ -15,6 +15,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <list>
 #include <stack>
@@ -2469,8 +2470,12 @@ void Interpreter::FlushToonShadow() {
         vertN++;
     }
     const float cenX = sumX / (float)vertN, cenZ = sumZ / (float)vertN;
-    const float slabTop = minY + mShadowSlabRise;                     // above the feet (uphill ground)
-    const float slabBottom = minY - std::max(5.0f, mShadowSlabDepth); // below the feet (downhill / cliffs)
+    float feetY = minY;
+    if (mRsp->toon_shadow_clamp_feet) {
+        feetY = std::max(minY, mRsp->toon_shadow_feet_clamp_y);
+    }
+    const float slabTop = feetY + mShadowSlabRise;                     // above the feet (uphill ground)
+    const float slabBottom = feetY - std::max(5.0f, mShadowSlabDepth); // below the feet (downhill / cliffs)
 
     // Cast direction from the cel key light (toward-light dir snapshotted at arm time), elevation-remapped
     // against world up so a low light still casts a short shadow (Length slider drives minElev).
@@ -3846,6 +3851,14 @@ bool gfx_vtx_otr_filepath_handler_custom(F3DGfx** cmd0) {
 bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
     F3DGfx* cmd = *cmd0;
     char* fileName = (char*)cmd->words.w1;
+
+    // A malformed optional model can reference the same absent child display
+    // list every frame. Avoid repeating the resource lookup and trace-log storm.
+    static std::unordered_set<std::string> missingDisplayLists;
+    if (missingDisplayLists.find(fileName) != missingDisplayLists.end()) {
+        return false;
+    }
+
     F3DGfx* nDL =
         (F3DGfx*)Ship::Context::GetInstance()->GetResourceManager()->GetResourceRawPointer((const char*)fileName);
 
@@ -3857,10 +3870,11 @@ bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
             g_exec_stack.branch(cmd);
             return true; // shortcut cmd increment
         } else {
-            assert(0 && "???");
-            // gfx_path.pop_back();
-            // cmd = cmd_stack.top();
-            // cmd_stack.pop();
+            // Optional model packs can contain a display list that references a child
+            // resource they do not provide. Treat that malformed reference as an empty
+            // display list instead of terminating the renderer (and the Android app).
+            missingDisplayLists.emplace(fileName);
+            SPDLOG_ERROR("G_DL_OTR_FILEPATH: Display list resource is missing: {}", fileName);
         }
     }
     return false;
@@ -4438,9 +4452,9 @@ bool gfx_set_toon_shadow_handler_custom(F3DGfx** cmd0) {
     F3DGfx* cmd = *cmd0;
 
     // Arm flag: any nonzero normal byte arms the shadow for this object; all-zero disarms it.
-    int8_t nx = (cmd->words.w0 >> 16) & 0xFF;
-    int8_t ny = (cmd->words.w0 >> 8) & 0xFF;
-    int8_t nz = (cmd->words.w0 >> 0) & 0xFF;
+    uint8_t nx = (cmd->words.w0 >> 16) & 0xFF;
+    uint8_t ny = (cmd->words.w0 >> 8) & 0xFF;
+    uint8_t nz = (cmd->words.w0 >> 0) & 0xFF;
 
     float sizeOrSentinel;
     uint32_t w1Bits = (uint32_t)cmd->words.w1;
@@ -4457,6 +4471,9 @@ bool gfx_set_toon_shadow_handler_custom(F3DGfx** cmd0) {
 
     gfx->mRsp->toon_shadow_size = sizeOrSentinel;
     gfx->mRdp->toon_shadow = (nx | ny | nz) != 0;
+    int16_t feetClamp = (int16_t)(((uint16_t)nx << 8) | (uint16_t)ny);
+    gfx->mRsp->toon_shadow_clamp_feet = (feetClamp != -32768);
+    gfx->mRsp->toon_shadow_feet_clamp_y = (float)feetClamp;
     // Snapshot THIS object's key direction (set by the gSPToonKey just before this command) so its
     // deferred shadow flush uses it, not whatever later object last touched toon_key_dir.
     gfx->mRsp->toon_shadow_dir[0] = gfx->mRsp->toon_key_dir[0];

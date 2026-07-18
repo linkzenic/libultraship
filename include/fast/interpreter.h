@@ -274,6 +274,9 @@ struct RSP {
     // same light the cel shading uses.
     float toon_shadow_size;   // eased 0..1 drop-shadow size for this object (carried in the arm command's w1)
     float toon_shadow_dir[3]; // key direction captured at arm time, used by the deferred shadow flush
+    // Optional world-Y floor clamp for deep-rooted models such as signposts.
+    float toon_shadow_feet_clamp_y;
+    bool toon_shadow_clamp_feet;
 
     uint32_t geometry_mode;
     int16_t fog_mul, fog_offset;

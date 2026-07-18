@@ -2829,11 +2829,8 @@ typedef union Gfx {
         _g->words.w1 = _SHIFTL((r) & 0xFF, 16, 8) | _SHIFTL((g) & 0xFF, 8, 8) | _SHIFTL((b) & 0xFF, 0, 8);      \
     }
 
-// SOH [Enhancement] Actor shadow per-object marker. nx/ny/nz are the floor polygon's unit normal (each a
-// signed byte, * 127) and `planeD` is that plane's constant (raw float bits in w1) so the renderer can
-// flatten the object onto the actual tilted floor, not a flat horizontal plane. A zero normal disarms the
-// shadow for this object. Blend strength + length are global (pushed once per frame, not per object). The
-// shadow direction reuses the object's gSPToonKey, so emit this AFTER the key.
+// SOH [Enhancement] Actor shadow per-object marker. `planeD` carries the eased size. nz is the arm marker;
+// nx:ny optionally carry a signed world-Y floor clamp. A zero normal disarms the shadow for this object.
 #define gSPToonShadow(pkt, nx, ny, nz, planeD)                                                     \
     {                                                                                              \
         Gfx* _g = (Gfx*)(pkt);                                                                     \
@@ -2846,6 +2843,10 @@ typedef union Gfx {
                        _SHIFTL((ny) & 0xFF, 8, 8) | _SHIFTL((nz) & 0xFF, 0, 8);                    \
         _g->words.w1 = _pd.u;                                                                      \
     }
+
+#define TOON_SHADOW_NO_CLAMP (-32768)
+#define gSPToonShadowArm(pkt, feetClampY, size)                                                    \
+    gSPToonShadow(pkt, ((s32)(feetClampY) >> 8) & 0xFF, (s32)(feetClampY) & 0xFF, 0x7F, (size))
 
 // SOH [Enhancement] Actor shadow: render the frame's accumulated shadow volumes now. Emitted at the pre-actor
 // hook (after the room, before actors) so the shadows land only on the environment. A zero normal + the
