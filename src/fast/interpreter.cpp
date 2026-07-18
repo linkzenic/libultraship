@@ -2868,10 +2868,26 @@ void Interpreter::RenderShadowVolumes() {
     // Fill + submit the whole volume for the current pass: fast direct-write path, or the per-triangle GfxSpTri1
     // fallback if the captured layout was unexpected (shadowStride == 0).
     auto drawVolume = [&]() {
-        for (size_t t = 0; (t * 3) + 3 <= vertCount; t++) {
-            loadTri(t);
-            GfxSpTri1(MAX_VERTICES + 0, MAX_VERTICES + 1, MAX_VERTICES + 2, false);
+        if (shadowStride == 0) {
+            for (size_t t = 0; t < triTotal; t++) {
+                loadTri(t);
+                GfxSpTri1(MAX_VERTICES + 0, MAX_VERTICES + 1, MAX_VERTICES + 2, false);
+            }
+        } else {
+            for (size_t t = 0; t < triTotal; t++) {
+                const LoadedVertex& a = mShadowXform[t * 3 + 0];
+                const LoadedVertex& b = mShadowXform[t * 3 + 1];
+                const LoadedVertex& c = mShadowXform[t * 3 + 2];
+                if (faceCulled(a, b, c)) {
+                    continue;
+                }
+                appendShadowVert(a), appendShadowVert(b), appendShadowVert(c);
+                if (++mBufVboNumTris == MAX_TRI_BUFFER) {
+                    Flush();
+                }
+            }
         }
+        Flush();
     };
 
     for (int band = 0; band < kShadowBands; band++) {
