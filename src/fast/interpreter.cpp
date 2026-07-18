@@ -15,6 +15,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <list>
 #include <stack>
@@ -3853,6 +3854,14 @@ bool gfx_vtx_otr_filepath_handler_custom(F3DGfx** cmd0) {
 bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
     F3DGfx* cmd = *cmd0;
     char* fileName = (char*)cmd->words.w1;
+
+    // A malformed optional model can reference the same absent child display
+    // list every frame. Avoid repeating the resource lookup and trace-log storm.
+    static std::unordered_set<std::string> missingDisplayLists;
+    if (missingDisplayLists.find(fileName) != missingDisplayLists.end()) {
+        return false;
+    }
+
     F3DGfx* nDL =
         (F3DGfx*)Ship::Context::GetInstance()->GetResourceManager()->GetResourceRawPointer((const char*)fileName);
 
@@ -3864,10 +3873,11 @@ bool gfx_dl_otr_filepath_handler_custom(F3DGfx** cmd0) {
             g_exec_stack.branch(cmd);
             return true; // shortcut cmd increment
         } else {
-            assert(0 && "???");
-            // gfx_path.pop_back();
-            // cmd = cmd_stack.top();
-            // cmd_stack.pop();
+            // Optional model packs can contain a display list that references a child
+            // resource they do not provide. Treat that malformed reference as an empty
+            // display list instead of terminating the renderer (and the Android app).
+            missingDisplayLists.emplace(fileName);
+            SPDLOG_ERROR("G_DL_OTR_FILEPATH: Display list resource is missing: {}", fileName);
         }
     }
     return false;
