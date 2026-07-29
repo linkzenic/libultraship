@@ -33,6 +33,17 @@ void Ship::Mobile::ImGuiProcessEvent(bool wantsTextInput) {
 #ifdef __ANDROID__
 #include <SDL_gamecontroller.h>
 #include <jni.h>
+#include <atomic>
+
+static std::atomic<bool> sGamepadBackPressed{false};
+
+extern "C" void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeGamepadBackPressed(JNIEnv* env, jobject obj) {
+    sGamepadBackPressed = true;
+}
+
+bool Ship::Mobile::ConsumeGamepadBackPress() {
+    return sGamepadBackPressed.exchange(false);
+}
 
 void Ship::Mobile::Init() {
     // None (add here Android initialization steps)

@@ -17,5 +17,8 @@ class Mobile {
     static void DisableTouchArea();
     static float GetCameraYaw();
     static float GetCameraPitch();
+#ifdef __ANDROID__
+    static bool ConsumeGamepadBackPress();
+#endif
 };
 }; // namespace Ship
