@@ -24,7 +24,11 @@ int32_t osContInit(OSMesgQueue* mq, uint8_t* controllerBits, OSContStatus* statu
     }
 
     SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
-    if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_SENSOR) != 0) {
+    uint32_t controllerSubsystems = SDL_INIT_GAMECONTROLLER;
+#if !defined(__TVOS__)
+    controllerSubsystems |= SDL_INIT_SENSOR;
+#endif
+    if (SDL_Init(controllerSubsystems) != 0) {
         SPDLOG_ERROR("Failed to initialize SDL game controllers ({})", SDL_GetError());
         exit(EXIT_FAILURE);
     }

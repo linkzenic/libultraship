@@ -13,7 +13,7 @@ if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     list(FILTER Source_Files__Audio EXCLUDE REGEX "audio/WasapiAudioPlayer.*")
 endif()
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+if (NOT CMAKE_SYSTEM_NAME MATCHES "Darwin|iOS|tvOS")
     list(FILTER Source_Files__Audio EXCLUDE REGEX "audio/CoreAudioAudioPlayer.*")
 endif()
 
@@ -59,7 +59,7 @@ target_sources(libultraship PRIVATE ${Source_Files__Window__Gui})
 
 file(GLOB_RECURSE Source_Files__Utils RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "utils/*.cpp" "utils/*.c")
 
-if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "iOS|tvOS")
     list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/AppleFolderManager.mm)
 endif()
 
@@ -72,7 +72,7 @@ target_sources(libultraship PRIVATE ${Source_Files__Utils})
 
 #=================== Port ===================
 
-if (CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME MATCHES "iOS|tvOS")
     set(Source_Files__Port
         ${CMAKE_CURRENT_SOURCE_DIR}/port/mobile/MobileImpl.cpp
     )

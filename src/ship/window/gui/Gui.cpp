@@ -5,6 +5,7 @@
 #include <cstring>
 #include <utility>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "ship/config/Config.h"
@@ -103,7 +104,14 @@ void Gui::Init(GuiWindowInitData windowImpl) {
     mImGuiIo->ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NoMouseCursorChange;
 
     // Add Font Awesome and merge it into the default font.
-    mImGuiIo->Fonts->AddFontDefault();
+    ImFontConfig defaultFontConfig;
+#if defined(__IOS__)
+    // iPhones render the SDL window at Retina density. Rasterizing the atlas at
+    // device density keeps the menu glyphs crisp without changing their logical
+    // size or Linkzenic's user-controlled menu scale.
+    defaultFontConfig.RasterizerDensity = 3.0f;
+#endif
+    mImGuiIo->Fonts->AddFontDefault(&defaultFontConfig);
     // This must match the default font size, which is 13.0f.
     float baseFontSize = 13.0f;
     // FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
@@ -113,6 +121,9 @@ void Gui::Init(GuiWindowInitData windowImpl) {
     iconsConfig.MergeMode = true;
     iconsConfig.PixelSnapH = true;
     iconsConfig.GlyphMinAdvanceX = iconFontSize;
+#if defined(__IOS__)
+    iconsConfig.RasterizerDensity = 3.0f;
+#endif
     mImGuiIo->Fonts->AddFontFromMemoryCompressedBase85TTF(fontawesome_compressed_data_base85, iconFontSize,
                                                           &iconsConfig, sIconsRanges);
 
@@ -126,6 +137,9 @@ void Gui::Init(GuiWindowInitData windowImpl) {
     // Trap the Android Back key so it goes to SDL (fires ImGuiKey_AppBack) rather than
     // triggering super.onBackPressed() which sends the app to the background.
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+#elif defined(__IOS__)
+    mImGuiIo->ConfigFlags |= ImGuiConfigFlags_IsTouchScreen;
+    mImGuiIo->MouseDragThreshold = 12.0f;
 #endif
 
     mImGuiIniPath = Context::GetPathRelativeToAppDirectory("imgui.ini");
@@ -299,12 +313,53 @@ bool Gui::SupportsViewports() {
 void Gui::HandleWindowEvents(WindowEvent event) {
     switch (Context::GetInstance()->GetWindow()->GetWindowBackend()) {
         case WindowBackend::FAST3D_SDL_OPENGL:
-        case WindowBackend::FAST3D_SDL_METAL:
-            ImGui_ImplSDL2_ProcessEvent(static_cast<const SDL_Event*>(event.Sdl.Event));
+        case WindowBackend::FAST3D_SDL_METAL: {
+            const SDL_Event* sdlEvent = static_cast<const SDL_Event*>(event.Sdl.Event);
+#if defined(__IOS__)
+            // SDL only turns the primary iOS finger into mouse events. Track the
+            // raw finger stream as well so two-finger menu scrolling works.
+            static std::unordered_set<SDL_FingerID> activeTouchFingers;
+            static bool twoFingerScrolling = false;
+            if (sdlEvent->type == SDL_FINGERDOWN) {
+                activeTouchFingers.insert(sdlEvent->tfinger.fingerId);
+                if (activeTouchFingers.size() >= 2) {
+                    twoFingerScrolling = true;
+                    // Cancel any slider/button press claimed by the first
+                    // finger when the gesture becomes a two-finger scroll.
+                    mImGuiIo->AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+                }
+            } else if (sdlEvent->type == SDL_FINGERUP) {
+                activeTouchFingers.erase(sdlEvent->tfinger.fingerId);
+                if (activeTouchFingers.size() < 2) {
+                    twoFingerScrolling = false;
+                }
+            }
+#endif
+            ImGui_ImplSDL2_ProcessEvent(sdlEvent);
+#if defined(__IOS__)
+            // SDL converts a primary iOS finger into touch-sourced mouse events.
+            // ImGui supports taps but does not turn a finger drag into wheel
+            // scrolling, so translate vertical drags that begin on non-active
+            // menu content into natural direct scrolling.
+            if (!twoFingerScrolling &&
+                sdlEvent->type == SDL_MOUSEMOTION &&
+                sdlEvent->motion.which == SDL_TOUCH_MOUSEID &&
+                (sdlEvent->motion.state & SDL_BUTTON_LMASK) != 0 &&
+                !ImGui::IsAnyItemActive()) {
+                mImGuiIo->AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+                mImGuiIo->AddMouseWheelEvent(0.0f, sdlEvent->motion.yrel / 24.0f);
+            }
+            if (twoFingerScrolling && sdlEvent->type == SDL_FINGERMOTION) {
+                mImGuiIo->AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+                const float dragPixels = sdlEvent->tfinger.dy * mImGuiIo->DisplaySize.y;
+                mImGuiIo->AddMouseWheelEvent(0.0f, dragPixels / 24.0f);
+            }
+#endif
 #if defined(__ANDROID__) || defined(__IOS__)
             Mobile::ImGuiProcessEvent(mImGuiIo->WantTextInput);
 #endif
             break;
+        }
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
             ImGui_ImplWin32_WndProcHandler(static_cast<HWND>(event.Win32.Handle), event.Win32.Msg, event.Win32.Param1,
@@ -377,6 +432,26 @@ void Gui::ImGuiWMNewFrame() {
         case WindowBackend::FAST3D_SDL_OPENGL:
         case WindowBackend::FAST3D_SDL_METAL:
             ImGui_ImplSDL2_NewFrame();
+#if defined(__IOS__)
+            // ImGui's SDL2 backend does not query the SDL Metal renderer and
+            // therefore leaves DisplayFramebufferScale at 1 on iOS even when
+            // the CAMetalLayer is using the screen's nativeScale. Supply the
+            // real point-to-pixel ratio so draw data targets the native
+            // drawable while input and menu layout remain in logical points.
+            if (mImpl.Metal.Renderer != nullptr && mImpl.Metal.Window != nullptr) {
+                int logicalWidth = 0;
+                int logicalHeight = 0;
+                int drawableWidth = 0;
+                int drawableHeight = 0;
+                SDL_GetWindowSize(static_cast<SDL_Window*>(mImpl.Metal.Window), &logicalWidth, &logicalHeight);
+                SDL_GetRendererOutputSize(mImpl.Metal.Renderer, &drawableWidth, &drawableHeight);
+                if (logicalWidth > 0 && logicalHeight > 0) {
+                    mImGuiIo->DisplayFramebufferScale =
+                        ImVec2(static_cast<float>(drawableWidth) / logicalWidth,
+                               static_cast<float>(drawableHeight) / logicalHeight);
+                }
+            }
+#endif
             break;
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
@@ -519,7 +594,14 @@ void Gui::DrawMenu() {
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
+#if defined(__APPLE__) && (TARGET_OS_IOS || TARGET_OS_TV)
+    // Window::GetWidth/Height report the Metal drawable size on iOS/tvOS so
+    // Fast3D can render at native resolution. ImGui layout is expressed in
+    // logical points, however, so size the desktop/dockspace from its viewport.
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+#else
     ImGui::SetNextWindowSize(ImVec2((int)wnd->GetWidth(), (int)wnd->GetHeight()));
+#endif
     ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -566,9 +648,19 @@ void Gui::DrawMenu() {
         }
     }
 #else
-    if (ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+#if defined(__TVOS__)
+    // tvOS handles the physical Back/View button (and the standalone left
+    // Joy-Con minus-button fallback) directly in the SDL event path. Polling
+    // GamepadBack here as well would toggle the menu twice in one frame.
+    const bool menuTogglePressed =
+        ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+#else
+    const bool menuTogglePressed =
+        ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
         (ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) &&
-         Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0))) {
+         Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0));
+#endif
+    if (menuTogglePressed) {
         if ((ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) && GetMenu()) {
             GetMenu()->ToggleVisibility();
         } else if ((ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) &&
@@ -627,7 +719,7 @@ void Gui::HandleMouseCapture() {
 
 void Gui::StartFrame() {
     HandleMouseCapture();
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(__TVOS__)
     // On first launch FOCUS_GAINED never fires so gamepads list stays empty.
     // SetGamepadMode sets WantUpdateGamepadsList without touching the event queue.
     {
@@ -644,9 +736,9 @@ void Gui::StartFrame() {
 #endif
     ImGuiBackendNewFrame();
     ImGuiWMNewFrame();
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(__TVOS__)
     // ImGui_ImplSDL2_NewFrame clears HasGamepad (virtual joystick has no controller db entry).
-    // Restore it so NavUpdate accepts InjectMenuNavKeys() events.
+    // Restore it so NavUpdate accepts platform-injected menu navigation events.
     mImGuiIo->BackendFlags |= ImGuiBackendFlags_HasGamepad;
 #endif
     ImGui::NewFrame();
@@ -675,8 +767,20 @@ void Gui::CalculateGameViewport() {
     mainPos.x -= mTemporaryWindowPos.x;
     mainPos.y -= mTemporaryWindowPos.y;
     ImVec2 size = ImGui::GetContentRegionAvail();
-    mInterpreter.lock()->mCurDimensions.width = (uint32_t)(size.x * mInterpreter.lock()->mCurDimensions.internal_mul);
-    mInterpreter.lock()->mCurDimensions.height = (uint32_t)(size.y * mInterpreter.lock()->mCurDimensions.internal_mul);
+#if defined(__APPLE__) && (TARGET_OS_IOS || TARGET_OS_TV)
+    // The game is presented in logical points but rendered into the native
+    // framebuffer. Keeping these coordinate spaces separate makes the complete
+    // picture fit the device without sacrificing render quality.
+    const float framebufferScaleX = std::max(1.0f, mImGuiIo->DisplayFramebufferScale.x);
+    const float framebufferScaleY = std::max(1.0f, mImGuiIo->DisplayFramebufferScale.y);
+#else
+    constexpr float framebufferScaleX = 1.0f;
+    constexpr float framebufferScaleY = 1.0f;
+#endif
+    mInterpreter.lock()->mCurDimensions.width =
+        (uint32_t)(size.x * framebufferScaleX * mInterpreter.lock()->mCurDimensions.internal_mul);
+    mInterpreter.lock()->mCurDimensions.height =
+        (uint32_t)(size.y * framebufferScaleY * mInterpreter.lock()->mCurDimensions.internal_mul);
     mInterpreter.lock()->mGameWindowViewport.x = (int16_t)mainPos.x;
     mInterpreter.lock()->mGameWindowViewport.y = (int16_t)mainPos.y;
     mInterpreter.lock()->mGameWindowViewport.width = (int16_t)size.x;
@@ -729,7 +833,8 @@ void Gui::DrawGame() {
     GetGameOverlay()->Draw();
 
     ImVec2 mainPos = ImGui::GetWindowPos();
-    ImVec2 size = ImGui::GetContentRegionAvail();
+    const ImVec2 availableSize = ImGui::GetContentRegionAvail();
+    ImVec2 size = availableSize;
     ImVec2 pos = ImVec2(0, 0);
     if (Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_LOW_RES_MODE, 0) ==
         1) { // N64 Mode takes priority
@@ -768,6 +873,19 @@ void Gui::DrawGame() {
                           float(mInterpreter.lock()->mCurDimensions.height) * factor);
         }
     }
+
+#if defined(__APPLE__) && (TARGET_OS_IOS || TARGET_OS_TV)
+    // Desktop pixel-perfect settings can request a presentation rectangle in
+    // physical pixels that is larger than the iOS/tvOS logical-point viewport.
+    // Preserve the high-resolution game framebuffer, but aspect-fit its final
+    // presentation so the whole picture remains visible.
+    if (size.x > availableSize.x || size.y > availableSize.y || pos.x < 0.0f || pos.y < 0.0f) {
+        const float fitScale = std::min(availableSize.x / size.x, availableSize.y / size.y);
+        size = ImVec2(floor(size.x * fitScale), floor(size.y * fitScale));
+        pos = ImVec2(floor((availableSize.x - size.x) * 0.5f), floor((availableSize.y - size.y) * 0.5f));
+    }
+#endif
+
     uintptr_t fb = Ship::Context::GetInstance()->GetWindow()->GetGfxFrameBuffer();
     if (fb) {
         ImGui::SetCursorPos(pos);

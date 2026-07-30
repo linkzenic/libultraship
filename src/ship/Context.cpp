@@ -400,8 +400,16 @@ std::string Context::GetAppBundlePath() {
 #endif
 
 #ifdef __IOS__
-    const char* home = getenv("HOME");
-    return std::string(home) + "/Documents";
+    char* basePath = SDL_GetBasePath();
+    if (basePath != nullptr) {
+        std::string result(basePath);
+        SDL_free(basePath);
+        while (!result.empty() && result.back() == '/') {
+            result.pop_back();
+        }
+        return result;
+    }
+    return ".";
 #endif
 
 #ifdef NON_PORTABLE
@@ -462,7 +470,10 @@ std::string Context::GetAppDirectoryPath(std::string appName) {
     }
 #endif
 
-#ifdef __IOS__
+#if defined(__TVOS__)
+    const char* home = getenv("HOME");
+    return std::string(home) + "/Library/Caches/Ship of Harkinian";
+#elif defined(__IOS__)
     const char* home = getenv("HOME");
     return std::string(home) + "/Documents";
 #endif

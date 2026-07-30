@@ -232,7 +232,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
         }
     }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(__IOS__)
     // Implement fullscreening with native macOS APIs
     if (on != isNativeMacOSFullscreenActive(mWnd)) {
         toggleNativeMacOSFullscreen(mWnd);
@@ -371,7 +371,8 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
     int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
 
 #ifdef __IOS__
-    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN;
+    // Use the native-density drawable for the iOS menu presentation path.
+    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
 #else
     Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
 #endif
@@ -519,8 +520,12 @@ void GfxWindowBackendSDL2::SetMouseCallbacks(bool (*onMouseButtonDown)(int btn),
 }
 
 void GfxWindowBackendSDL2::GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
-#ifdef __APPLE__
-    SDL_GetWindowSize(mWnd, static_cast<int*>((void*)width), static_cast<int*>((void*)height));
+#if defined(__APPLE__)
+    if (mRenderer != nullptr) {
+        SDL_GetRendererOutputSize(mRenderer, static_cast<int*>((void*)width), static_cast<int*>((void*)height));
+    } else {
+        SDL_GetWindowSize(mWnd, static_cast<int*>((void*)width), static_cast<int*>((void*)height));
+    }
 #else
     SDL_GL_GetDrawableSize(mWnd, static_cast<int*>((void*)width), static_cast<int*>((void*)height));
 #endif
@@ -577,6 +582,127 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
     Ship::WindowEvent event_impl;
     event_impl.Sdl = { &event };
     Ship::Context::GetInstance()->GetWindow()->GetGui()->HandleWindowEvents(event_impl);
+#ifdef __TVOS__
+    // ImGui's SDL backend polls controllers it has opened itself. On tvOS the
+    // game controller can be available to SoH while absent from that private
+    // list, leaving the menu visible but inert. Feed the standardized SDL
+    // controller events directly into ImGui's navigation queue.
+    if (event.type == SDL_CONTROLLERBUTTONDOWN || event.type == SDL_CONTROLLERBUTTONUP) {
+        const bool pressed = event.type == SDL_CONTROLLERBUTTONDOWN;
+        ImGuiKey key = ImGuiKey_None;
+        switch (event.cbutton.button) {
+            case SDL_CONTROLLER_BUTTON_A:
+                key = ImGuiKey_GamepadFaceDown;
+                break;
+            case SDL_CONTROLLER_BUTTON_B:
+                key = ImGuiKey_GamepadFaceRight;
+                break;
+            case SDL_CONTROLLER_BUTTON_X:
+                key = ImGuiKey_GamepadFaceLeft;
+                break;
+            case SDL_CONTROLLER_BUTTON_Y:
+                key = ImGuiKey_GamepadFaceUp;
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                key = ImGuiKey_GamepadDpadUp;
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                key = ImGuiKey_GamepadDpadDown;
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                key = ImGuiKey_GamepadDpadLeft;
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                key = ImGuiKey_GamepadDpadRight;
+                break;
+            case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+                key = ImGuiKey_GamepadL1;
+                break;
+            case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+                key = ImGuiKey_GamepadR1;
+                break;
+            default:
+                break;
+        }
+        if (key != ImGuiKey_None) {
+            ImGui::GetIO().AddKeyEvent(key, pressed);
+        }
+    } else if (event.type == SDL_CONTROLLERAXISMOTION) {
+        constexpr float deadzone = 0.35f;
+        const float value = event.caxis.value / 32767.0f;
+        switch (event.caxis.axis) {
+            case SDL_CONTROLLER_AXIS_LEFTX:
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, value < -deadzone,
+                                                 value < 0.0f ? -value : 0.0f);
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, value > deadzone,
+                                                 value > 0.0f ? value : 0.0f);
+                break;
+            case SDL_CONTROLLER_AXIS_LEFTY:
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, value < -deadzone,
+                                                 value < 0.0f ? -value : 0.0f);
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, value > deadzone,
+                                                 value > 0.0f ? value : 0.0f);
+                break;
+            default:
+                break;
+        }
+    } else if (event.type == SDL_JOYAXISMOTION) {
+        SDL_Joystick* joystick = SDL_JoystickFromInstanceID(event.jaxis.which);
+        const char* joystickName = joystick != nullptr ? SDL_JoystickName(joystick) : nullptr;
+        if (joystickName != nullptr && strstr(joystickName, "Siri Remote") != nullptr) {
+            constexpr float deadzone = 0.35f;
+            const float value = event.jaxis.value / 32767.0f;
+            if (event.jaxis.axis == 0) {
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, value < -deadzone,
+                                                 value < 0.0f ? -value : 0.0f);
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, value > deadzone,
+                                                 value > 0.0f ? value : 0.0f);
+            } else if (event.jaxis.axis == 1) {
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, value < -deadzone,
+                                                 value < 0.0f ? -value : 0.0f);
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, value > deadzone,
+                                                 value > 0.0f ? value : 0.0f);
+            }
+        }
+    } else if (event.type == SDL_JOYBUTTONDOWN || event.type == SDL_JOYBUTTONUP) {
+        SDL_Joystick* joystick = SDL_JoystickFromInstanceID(event.jbutton.which);
+        const char* joystickName = joystick != nullptr ? SDL_JoystickName(joystick) : nullptr;
+        if (joystickName != nullptr && strstr(joystickName, "Siri Remote") != nullptr) {
+            const bool pressed = event.type == SDL_JOYBUTTONDOWN;
+            if (event.jbutton.button == 0) {
+                ImGui::GetIO().AddKeyEvent(ImGuiKey_GamepadFaceDown, pressed);
+            } else if (event.jbutton.button == 1) {
+                ImGui::GetIO().AddKeyEvent(ImGuiKey_GamepadFaceRight, pressed);
+            }
+        }
+    }
+
+    if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+        bool toggleMenu = event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK;
+
+        // Apple exposes a separately connected left Joy-Con's minus button as
+        // Start. A paired Joy-Con controller correctly exposes minus as Back,
+        // so only apply this fallback to the standalone left controller.
+        if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
+            SDL_GameController* controller = SDL_GameControllerFromInstanceID(event.cbutton.which);
+            const char* controllerName = controller != nullptr ? SDL_GameControllerName(controller) : nullptr;
+            toggleMenu = controllerName != nullptr && strstr(controllerName, "Joy-Con (L)") != nullptr;
+        }
+
+        if (toggleMenu) {
+            auto gui = Ship::Context::GetInstance()->GetWindow()->GetGui();
+            if (gui->GetMenu()) {
+                gui->GetMenu()->ToggleVisibility();
+                Ship::Context::GetInstance()->GetWindow()->GetMouseStateManager()->UpdateMouseCapture();
+                if (gui->GetMenuOrMenubarVisible()) {
+                    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+                } else {
+                    ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+                }
+            }
+        }
+    }
+#endif
     switch (event.type) {
 #ifndef TARGET_WEB
         // Scancodes are broken in Emscripten SDL2: https://bugzilla.libsdl.org/show_bug.cgi?id=3259
@@ -601,7 +727,11 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
             switch (event.window.event) {
                 case SDL_WINDOWEVENT_SIZE_CHANGED:
 #ifdef __APPLE__
-                    SDL_GetWindowSize(mWnd, &mWindowWidth, &mWindowHeight);
+                    if (mRenderer != nullptr) {
+                        SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
+                    } else {
+                        SDL_GetWindowSize(mWnd, &mWindowWidth, &mWindowHeight);
+                    }
 #else
                     SDL_GL_GetDrawableSize(mWnd, &mWindowWidth, &mWindowHeight);
 #endif
@@ -635,7 +765,7 @@ void GfxWindowBackendSDL2::HandleEvents() {
     }
 
     // resync fullscreen state
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
     auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
     if (mFullScreen != nextFullscreenState) {
         mFullScreen = nextFullscreenState;

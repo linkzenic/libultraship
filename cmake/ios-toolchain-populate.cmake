@@ -1,4 +1,12 @@
-set(PLATFORM "OS64COMBINED")
+if(SOH_APPLE_TARGET STREQUAL "tvos")
+    if(CMAKE_OSX_SYSROOT MATCHES "simulator")
+        set(PLATFORM "SIMULATORARM64_TVOS")
+    else()
+        set(PLATFORM "TVOS")
+    endif()
+else()
+    set(PLATFORM "OS64COMBINED")
+endif()
 include(FetchContent)
 FetchContent_Declare(iostoolchain
     GIT_REPOSITORY https://github.com/leetal/ios-cmake
