@@ -53,6 +53,13 @@ class AudioPlayer {
     // Get the number of output channels (2 for stereo, 6 for surround)
     int32_t GetNumOutputChannels() const;
 
+    // Platform lifecycle notifications. Most audio backends do not need
+    // special handling, but mobile Apple audio units must be stopped and
+    // restarted when an application moves between the background and
+    // foreground.
+    virtual void OnApplicationSuspend();
+    virtual void OnApplicationResume();
+
   protected:
     // Initialize the audio device.
     virtual bool DoInit() = 0;

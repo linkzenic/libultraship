@@ -36,6 +36,10 @@
 
 #include "ship/window/gui/Gui.h"
 
+#ifdef __IOS__
+#include "ship/audio/Audio.h"
+#endif
+
 #ifdef _WIN32
 #include <WTypesbase.h>
 #include <Windows.h>
@@ -704,6 +708,43 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
     }
 #endif
     switch (event.type) {
+#ifdef __IOS__
+        case SDL_APP_WILLENTERBACKGROUND: {
+            mAppInBackground = true;
+            previous_time = 0;
+            auto audio = Ship::Context::GetInstance()->GetAudio();
+            if (audio != nullptr && audio->GetAudioPlayer() != nullptr) {
+                audio->GetAudioPlayer()->OnApplicationSuspend();
+            }
+            break;
+        }
+        case SDL_APP_DIDENTERBACKGROUND:
+        case SDL_APP_WILLENTERFOREGROUND:
+            // Stay suspended until SDL reports that the app is interactive.
+            mAppInBackground = true;
+            break;
+        case SDL_APP_DIDENTERFOREGROUND: {
+            // Refresh every piece of state that can become stale while UIKit
+            // owns the screen. In particular, reset the manual frame clock so
+            // it cannot inherit a background interval.
+            previous_time = 0;
+            if (mRenderer != nullptr) {
+                SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
+                SDL_RenderSetVSync(mRenderer, mVsyncEnabled ? 1 : 0);
+            } else {
+                SDL_GetWindowSize(mWnd, &mWindowWidth, &mWindowHeight);
+                SDL_GL_MakeCurrent(mWnd, mCtx);
+                SDL_GL_SetSwapInterval(mVsyncEnabled ? 1 : 0);
+            }
+
+            auto audio = Ship::Context::GetInstance()->GetAudio();
+            if (audio != nullptr && audio->GetAudioPlayer() != nullptr) {
+                audio->GetAudioPlayer()->OnApplicationResume();
+            }
+            mAppInBackground = false;
+            break;
+        }
+#endif
 #ifndef TARGET_WEB
         // Scancodes are broken in Emscripten SDL2: https://bugzilla.libsdl.org/show_bug.cgi?id=3259
         case SDL_KEYDOWN:
@@ -777,7 +818,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
 }
 
 bool GfxWindowBackendSDL2::IsFrameReady() {
+#ifdef __IOS__
+    return !mAppInBackground;
+#else
     return true;
+#endif
 }
 
 static uint64_t qpc_to_100ns(uint64_t qpc) {

@@ -64,5 +64,8 @@ class GfxWindowBackendSDL2 final : public GfxWindowBackend {
     int mWindowWidth = 640;
     int mWindowHeight = 480;
     void (*mOnAllKeysUp)();
+#ifdef __IOS__
+    bool mAppInBackground = false;
+#endif
 };
 } // namespace Fast

@@ -87,6 +87,12 @@ int32_t AudioPlayer::GetNumOutputChannels() const {
     }
 }
 
+void AudioPlayer::OnApplicationSuspend() {
+}
+
+void AudioPlayer::OnApplicationResume() {
+}
+
 void AudioPlayer::Play(const uint8_t* buf, size_t len) {
     if (mAudioSettings.ChannelSetting != AudioChannelsSetting::audioMatrix51) {
         // Stereo or Raw 5.1 passthrough

@@ -5,7 +5,8 @@
 
 namespace Ship {
 
-CoreAudioAudioPlayer::CoreAudioAudioPlayer(AudioSettings settings) : AudioPlayer(settings), mInitialized(false) {
+CoreAudioAudioPlayer::CoreAudioAudioPlayer(AudioSettings settings)
+    : AudioPlayer(settings), mInitialized(false), mOutputRunning(false) {
     pthread_mutex_init(&mMutex, NULL);
 }
 
@@ -17,7 +18,10 @@ CoreAudioAudioPlayer::~CoreAudioAudioPlayer() {
 
 void CoreAudioAudioPlayer::DoClose() {
     if (mInitialized) {
-        AudioOutputUnitStop(mAudioUnit);
+        if (mOutputRunning) {
+            AudioOutputUnitStop(mAudioUnit);
+            mOutputRunning = false;
+        }
         AudioUnitUninitialize(mAudioUnit);
         AudioComponentInstanceDispose(mAudioUnit);
         mInitialized = false;
@@ -114,7 +118,50 @@ bool CoreAudioAudioPlayer::DoInit() {
     }
 
     mInitialized = true;
+    mOutputRunning = true;
     return true;
+}
+
+void CoreAudioAudioPlayer::OnApplicationSuspend() {
+#ifdef __IOS__
+    if (!mInitialized || !mOutputRunning) {
+        return;
+    }
+
+    OSStatus status = AudioOutputUnitStop(mAudioUnit);
+    if (status != noErr) {
+        SPDLOG_WARN("CoreAudio: Failed to stop audio unit while backgrounding: {}", status);
+    }
+    mOutputRunning = false;
+
+    // Audio callbacks stop while the application is suspended. Discard the
+    // queued samples so foreground playback starts at the current game state
+    // instead of draining stale audio.
+    pthread_mutex_lock(&mMutex);
+    mRingBufferReadPos = 0;
+    mRingBufferWritePos = 0;
+    pthread_mutex_unlock(&mMutex);
+#endif
+}
+
+void CoreAudioAudioPlayer::OnApplicationResume() {
+#ifdef __IOS__
+    if (!mInitialized || mOutputRunning) {
+        return;
+    }
+
+    pthread_mutex_lock(&mMutex);
+    mRingBufferReadPos = 0;
+    mRingBufferWritePos = 0;
+    pthread_mutex_unlock(&mMutex);
+
+    OSStatus status = AudioOutputUnitStart(mAudioUnit);
+    if (status != noErr) {
+        SPDLOG_ERROR("CoreAudio: Failed to restart audio unit after foregrounding: {}", status);
+        return;
+    }
+    mOutputRunning = true;
+#endif
 }
 
 int CoreAudioAudioPlayer::Buffered() {

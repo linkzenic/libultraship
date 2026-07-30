@@ -13,6 +13,8 @@ class CoreAudioAudioPlayer : public AudioPlayer {
     ~CoreAudioAudioPlayer();
 
     int Buffered() override;
+    void OnApplicationSuspend() override;
+    void OnApplicationResume() override;
 
   protected:
     bool DoInit() override;
@@ -32,6 +34,7 @@ class CoreAudioAudioPlayer : public AudioPlayer {
     size_t mRingBufferWritePos;
     pthread_mutex_t mMutex;
     bool mInitialized;
+    bool mOutputRunning;
 };
 } // namespace Ship
 #endif
