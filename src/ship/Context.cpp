@@ -400,14 +400,32 @@ std::string Context::GetAppBundlePath() {
 #endif
 
 #ifdef __IOS__
+    // The SDL base path can change after an unsigned IPA is re-signed. Use the
+    // canonical Apple resource directory first and retain SDL as a fallback.
+    FolderManager iosFolderManager;
+    const char* bundlePath = iosFolderManager.getMainBundlePath();
+    if (bundlePath != nullptr && bundlePath[0] != '\0') {
+        std::string result(bundlePath);
+        while (result.size() > 1 && result.back() == '/') {
+            result.pop_back();
+        }
+        std::error_code error;
+        if (std::filesystem::exists(result, error) && !error) {
+            return result;
+        }
+    }
+
     char* basePath = SDL_GetBasePath();
     if (basePath != nullptr) {
         std::string result(basePath);
         SDL_free(basePath);
-        while (!result.empty() && result.back() == '/') {
+        while (result.size() > 1 && result.back() == '/') {
             result.pop_back();
         }
-        return result;
+        std::error_code error;
+        if (std::filesystem::exists(result, error) && !error) {
+            return result;
+        }
     }
     return ".";
 #endif
