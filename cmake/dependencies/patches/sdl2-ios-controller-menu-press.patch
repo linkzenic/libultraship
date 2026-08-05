@@ -1,0 +1,24 @@
+diff --git a/src/video/uikit/SDL_uikitview.m b/src/video/uikit/SDL_uikitview.m
+index 6147c5f68..3d90fa215 100644
+--- a/src/video/uikit/SDL_uikitview.m
++++ b/src/video/uikit/SDL_uikitview.m
+@@ -382,8 +382,9 @@
+     }
+ #endif
+
+-#ifndef SDL_JOYSTICK_DISABLED
++#if TARGET_OS_TV && !defined(SDL_JOYSTICK_DISABLED)
+     /* Presses from Apple TV remote */
++    /* On iOS, controller B can also arrive as UIPressTypeMenu. */
+     if (!SDL_AppleTVRemoteOpenedAsJoystick) {
+         switch (press.type) {
+         case UIPressTypeUpArrow:
+@@ -407,7 +408,7 @@
+             break;
+         }
+     }
+-#endif /* !SDL_JOYSTICK_DISABLED */
++#endif /* TARGET_OS_TV && !defined(SDL_JOYSTICK_DISABLED) */
+
+     return SDL_SCANCODE_UNKNOWN;
+ }
