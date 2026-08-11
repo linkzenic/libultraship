@@ -6,6 +6,22 @@
 #include "ship/controller/controldeck/ControlDeck.h"
 
 namespace Ship {
+#ifdef __ANDROID__
+static bool AndroidDeviceHasGyroSensor() {
+    if ((SDL_WasInit(SDL_INIT_SENSOR) & SDL_INIT_SENSOR) == 0) {
+        SDL_InitSubSystem(SDL_INIT_SENSOR);
+    }
+
+    for (int32_t i = 0; i < SDL_NumSensors(); i++) {
+        if (SDL_SensorGetDeviceType(i) == SDL_SENSOR_GYRO) {
+            return true;
+        }
+    }
+
+    return false;
+}
+#endif
+
 std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFromConfig(uint8_t portIndex,
                                                                                        std::string id) {
     const std::string mappingCvarKey = CVAR_PREFIX_CONTROLLERS ".GyroMappings." + id;
@@ -38,13 +54,23 @@ std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFrom
 std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFromSDLInput(uint8_t portIndex) {
     std::shared_ptr<ControllerGyroMapping> mapping = nullptr;
 
+#ifdef __ANDROID__
+    const bool androidDeviceHasGyro = AndroidDeviceHasGyroSensor();
+#endif
+
     for (auto [instanceId, gamepad] : Context::GetRawInstance()
                                           ->GetControlDeck()
                                           ->GetConnectedPhysicalDeviceManager()
                                           ->GetConnectedSDLGamepadsForPort(portIndex)) {
+#ifdef __ANDROID__
+        if (!SDL_GameControllerHasSensor(gamepad, SDL_SENSOR_GYRO) && !androidDeviceHasGyro) {
+            continue;
+        }
+#else
         if (!SDL_GameControllerHasSensor(gamepad, SDL_SENSOR_GYRO)) {
             continue;
         }
+#endif
 
         for (int32_t button = SDL_CONTROLLER_BUTTON_A; button < SDL_CONTROLLER_BUTTON_MAX; button++) {
             if (SDL_GameControllerGetButton(gamepad, static_cast<SDL_GameControllerButton>(button))) {

@@ -22,6 +22,7 @@
 #include "ship/window/gui/Gui.h"
 #include <prism/processor.h>
 #include <fstream>
+#include <vector>
 #include "ship/Context.h"
 #include "ship/resource/factory/ShaderFactory.h"
 #include "fast/interpreter.h"
@@ -898,7 +899,7 @@ void GfxRenderingAPIOGL::ResolveMSAAColorBuffer(int fb_id_target, int fb_id_sour
 
     glBlitFramebuffer(0, 0, fb_src.width, fb_src.height, 0, 0, fb_dst.width, fb_dst.height, GL_COLOR_BUFFER_BIT,
                       GL_NEAREST);
-    glBindFramebuffer(GL_FRAMEBUFFER, mCurrentFrameBuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, mFrameBuffers[mCurrentFrameBuffer].fbo);
 
     if (mLastScissorEnabled != 1) {
         mLastScissorEnabled = 1;
@@ -952,7 +953,7 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
 
     // For msaa enabled buffers we can't perform a scaled blit to a simple sample buffer
     // First do an unscaled blit to a msaa resolved buffer
-    if (src.height != dst.height && src.width != dst.width && src.msaa_level > 1) {
+    if ((src.height != dst.height || src.width != dst.width) && src.msaa_level > 1) {
         // Start with the main buffer (0) as the msaa resolved buffer
         int fb_resolve_id = 0;
         FramebufferOGL fb_resolve = mFrameBuffers[fb_resolve_id];
@@ -987,7 +988,7 @@ void GfxRenderingAPIOGL::CopyFramebuffer(int fb_dst_id, int fb_src_id, int srcX0
 
     glBindFramebuffer(GL_FRAMEBUFFER, mFrameBuffers[mCurrentFrameBuffer].fbo);
 
-    glReadBuffer(GL_BACK);
+    glReadBuffer(mCurrentFrameBuffer == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0);
 
     if (mLastScissorEnabled != 1) {
         mLastScissorEnabled = 1;
@@ -1006,6 +1007,7 @@ void GfxRenderingAPIOGL::ReadFramebufferToCPU(int fb_id, uint32_t width, uint32_
     // Reading as RGBA8 and converting matches the DX11 path's approach.
     glBindFramebuffer(GL_FRAMEBUFFER, mFrameBuffers[fb_id].fbo);
 
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
     std::vector<uint8_t> rgba8(width * height * 4);
     glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba8.data());
 
@@ -1013,11 +1015,11 @@ void GfxRenderingAPIOGL::ReadFramebufferToCPU(int fb_id, uint32_t width, uint32_
         uint8_t r = (rgba8[i * 4 + 0] >> 3) & 0x1F;
         uint8_t g = (rgba8[i * 4 + 1] >> 3) & 0x1F;
         uint8_t b = (rgba8[i * 4 + 2] >> 3) & 0x1F;
-        uint8_t a = rgba8[i * 4 + 3] ? 1 : 0;
+        uint8_t a = rgba8[i * 4 + 3] >= 0x80 ? 1 : 0;
         rgba16_buf[i] = (r << 11) | (g << 6) | (b << 1) | a;
     }
-
     glBindFramebuffer(GL_FRAMEBUFFER, mFrameBuffers[mCurrentFrameBuffer].fbo);
+    glReadBuffer(mCurrentFrameBuffer == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0);
 }
 
 std::unordered_map<std::pair<float, float>, uint16_t, hash_pair_ff>

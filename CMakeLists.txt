@@ -49,7 +49,7 @@ endif()
 include(cmake/dependencies/common.cmake)
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Android")
-	include(cmake/dependencies/android.cmake)
+    include(cmake/dependencies/android.cmake)
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")

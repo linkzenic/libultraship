@@ -15,7 +15,9 @@ OtrArchive::OtrArchive(const std::string& archivePath) : Archive(archivePath) {
 }
 
 OtrArchive::~OtrArchive() {
-    SPDLOG_TRACE("destruct otrarchive: {}", GetPath());
+    if (spdlog::default_logger() != nullptr) {
+        SPDLOG_TRACE("destruct otrarchive: {}", GetPath());
+    }
 }
 
 std::shared_ptr<File> OtrArchive::LoadFile(const std::string& filePath) {

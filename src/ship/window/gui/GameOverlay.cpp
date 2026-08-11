@@ -238,8 +238,8 @@ void GameOverlay::Draw() {
 
             const ImVec4 color = ImVec4(1.0f, 1.0f, 1.0f, duration);
 #ifdef __ANDROID__
-            const float textWidth = GetStringWidth(overlay.Value.c_str()) * 2.0f;
-            const float textOffset = 40.0f * 2.0f;
+            const float textWidth = GetStringWidth(overlay.Value.c_str()) * 3.0f;
+            const float textOffset = 40.0f*3;
 #else
             const float textWidth = GetStringWidth(overlay.Value.c_str());
             const float textOffset = 40.0f;

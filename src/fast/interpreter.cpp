@@ -4870,6 +4870,27 @@ static void gfx_set_ucode_handler(UcodeHandlers ucode) {
     }
 }
 
+static bool gfx_is_valid_host_pointer(uintptr_t address) {
+    if (address < 0x10000) {
+        return false;
+    }
+
+#if UINTPTR_MAX > 0xFFFFFFFFu
+    uintptr_t addressForRangeCheck = address;
+#if defined(__aarch64__)
+    // Android's tagged-address ABI stores an allocation tag in the top byte of
+    // heap pointers. The tagged pointer remains valid for dereferencing, but the
+    // tag must be ignored when checking whether it is in user-space range.
+    addressForRangeCheck &= 0x00FFFFFFFFFFFFFFull;
+#endif
+    if (addressForRangeCheck > 0x0000FFFFFFFFFFFFull) {
+        return false;
+    }
+#endif
+
+    return true;
+}
+
 static void gfx_step() {
     auto& cmd = g_exec_stack.currCmd();
     auto cmd0 = cmd;
@@ -4902,12 +4923,7 @@ static void gfx_step() {
         if (opcode == OTR_G_VTX_OTR_FILEPATH || opcode == OTR_G_SETTIMG_OTR_FILEPATH ||
             opcode == OTR_G_DL_OTR_FILEPATH || opcode == OTR_G_PUSHCD || opcode == OTR_G_MTX_OTR_FILEPATH) {
             uintptr_t w1 = (uintptr_t)cmd->words.w1;
-            if (w1 < 0x10000
-#if UINTPTR_MAX > 0xFFFFFFFFu
-                // On 64-bit: filter kernel/sentinel addresses.
-                || w1 > 0x0000FFFFFFFFFFFFull
-#endif
-            ) {
+            if (!gfx_is_valid_host_pointer(w1)) {
                 ++g_exec_stack.currCmd();
                 return;
             }
@@ -5033,6 +5049,11 @@ bool Interpreter::IsFrameReady() {
 }
 
 bool Interpreter::ViewportMatchesRendererResolution() {
+#ifdef USE_OPENGLES
+    // Android/GLES framebuffer readback is only reliable from an owned framebuffer.
+    // Keep native-resolution rendering on the same offscreen path as higher resolutions.
+    return false;
+#endif
 #ifdef __APPLE__
     // Always treat the viewport as not matching the render resolution on mac
     // to avoid issues with retina scaling.
@@ -5342,16 +5363,9 @@ int32_t gfx_check_image_signature(const char* imgData) {
 
     // Filter addresses that are obviously not valid string pointers before
     // attempting to dereference for the "__OTR__" check.
-    if (i == 0 || i < 0x10000) {
+    if (!gfx_is_valid_host_pointer(i)) {
         return 0;
     }
-#if UINTPTR_MAX > 0xFFFFFFFFu
-    // On 64-bit: filter kernel/sentinel addresses. Upper bound covers all
-    // user-space layouts (x86_64 47-bit canonical, ARM64 48-bit VA, etc.).
-    if (i > 0x0000FFFFFFFFFFFFull) {
-        return 0;
-    }
-#endif
 
     return Ship::Context::GetRawInstance()->GetResourceManager()->OtrSignatureCheck(imgData);
 }

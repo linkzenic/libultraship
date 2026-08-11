@@ -27,11 +27,20 @@ target_sources(ImGui
     ${imgui_SOURCE_DIR}/imgui.cpp
 )
 
-target_sources(ImGui
-    PRIVATE
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
-)
+# I know this isn't where it goes, but Android needs a custom imgui impl sdl2 file.
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+    target_sources(ImGui
+        PRIVATE
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    )
+else()
+    target_sources(ImGui
+        PRIVATE
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/port/mobile/imgui_impl_sdl2.cpp # Custom implementation
+    )
+endif()
 
 target_include_directories(ImGui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends PRIVATE ${SDL2_INCLUDE_DIRS})
 

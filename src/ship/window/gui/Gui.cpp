@@ -10,13 +10,20 @@
 #include "ship/config/Config.h"
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
+#include "libultraship/bridge/consolevariablebridge.h"
+#include "fast/resource/type/Texture.h"
 #include "ship/resource/File.h"
 #include <stb_image.h>
 #include "ship/window/gui/Fonts.h"
 #include "ship/window/gui/resource/GuiTextureFactory.h"
 #include "ship/window/gui/resource/GuiTexture.h"
 
+#if defined(__ANDROID__) || defined(__IOS__)
+#include "ship/port/mobile/MobileImpl.h"
+#endif
+
 namespace Ship {
+
 #define TOGGLE_BTN ImGuiKey_F1
 #define TOGGLE_PAD_BTN ImGuiKey_GamepadBack
 
@@ -79,9 +86,16 @@ void Gui::Init() {
                                                           &iconsConfig, sIconsRanges);
 
 #if defined(__ANDROID__)
-    // Scale everything by 2 for Android
-    ImGui::GetStyle().ScaleAllSizes(2.0f);
-    mImGuiIo->FontGlobalScale = 2.0f;
+    // Scale Android menus from the persisted in-app setting.
+    float androidMenuScale = CVarGetFloat("gSettings.Menu.AndroidScale", 1.45f);
+    if (androidMenuScale < 1.0f) {
+        androidMenuScale = 1.0f;
+    } else if (androidMenuScale > 3.0f) {
+        androidMenuScale = 3.0f;
+    }
+    ImGui::GetStyle().ScaleAllSizes(androidMenuScale);
+    mImGuiIo->FontGlobalScale = androidMenuScale;
+    CVarSetInteger(CVAR_IMGUI_CONTROLLER_NAV, 1);
 #endif
 
     mImGuiIniPath = Context::GetPathRelativeToAppDirectory("imgui.ini");
@@ -226,12 +240,22 @@ void Gui::DrawMenu() {
 
     ImGui::DockSpace(dockId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None | ImGuiDockNodeFlags_NoDockingInCentralNode);
 
-    if (ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+    const bool touchBackPressed =
+#ifdef __ANDROID__
+        Ship::Mobile::ConsumeGamepadBackPress();
+#else
+        false;
+#endif
+
+    if (ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) || touchBackPressed ||
         (ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) &&
          Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0))) {
-        if ((ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) && GetMenu()) {
+        if ((ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) ||
+             touchBackPressed) &&
+            GetMenu()) {
             GetMenu()->ToggleVisibility();
-        } else if ((ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) &&
+        } else if ((ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) ||
+                    touchBackPressed) &&
                    GetMenuBar()) {
             GetMenuBar()->ToggleVisibility();
         }
@@ -242,6 +266,13 @@ void Gui::DrawMenu() {
         } else {
             mImGuiIo->ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
         }
+#ifdef __ANDROID__
+        if(GetMenuOrMenubarVisible()){
+            Ship::Mobile::DisableTouchArea();
+        }else{
+            Ship::Mobile::EnableTouchArea();
+        }
+#endif
     }
 
     // Mac interprets this as cmd+r when io.ConfigMacOSXBehavior is on (on by default)

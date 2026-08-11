@@ -5,12 +5,12 @@ find_package(SDL2 QUIET)
 if (NOT ${SDL2_FOUND})
     FetchContent_Declare(
         SDL2
-    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    GIT_TAG release-2.32.10
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+        GIT_TAG release-2.32.10
+        GIT_SHALLOW TRUE
+        OVERRIDE_FIND_PACKAGE
     )
-    message("SDL2 not found. Downloading now...")
     FetchContent_MakeAvailable(SDL2)
-    message("SDL2 downloaded to " ${FETCHCONTENT_BASE_DIR}/sdl2-src)
 endif()
 
 #=================== nlohmann-json ===================
@@ -20,6 +20,7 @@ if (NOT ${nlohmann_json_FOUND})
         nlohmann_json
         GIT_REPOSITORY https://github.com/nlohmann/json.git
         GIT_TAG v3.12.0
+        GIT_SHALLOW TRUE
         OVERRIDE_FIND_PACKAGE
     )
     FetchContent_MakeAvailable(nlohmann_json)
@@ -33,6 +34,7 @@ if (NOT ${tinyxml2_FOUND})
         tinyxml2
         GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
         GIT_TAG 11.0.0
+        GIT_SHALLOW TRUE
         OVERRIDE_FIND_PACKAGE
     )
     FetchContent_MakeAvailable(tinyxml2)
@@ -45,6 +47,7 @@ if (NOT ${spdlog_FOUND})
         spdlog
         GIT_REPOSITORY https://github.com/gabime/spdlog.git
         GIT_TAG v1.16.0
+        GIT_SHALLOW TRUE
         OVERRIDE_FIND_PACKAGE
     )
     FetchContent_MakeAvailable(spdlog)
@@ -64,6 +67,7 @@ if (NOT ${libzip_FOUND})
         libzip
         GIT_REPOSITORY https://github.com/nih-at/libzip.git
         GIT_TAG v1.11.4
+        GIT_SHALLOW TRUE
         OVERRIDE_FIND_PACKAGE
     )
     FetchContent_MakeAvailable(libzip)

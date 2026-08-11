@@ -44,6 +44,9 @@ class SDLGyroMapping final : public ControllerGyroMapping {
     std::string GetPhysicalDeviceName() override;
 
   private:
+#ifdef __ANDROID__
+    void GetAndroidGyroData(SDL_GameController* gamepad, float gyroData[3]);
+#endif
     float mNeutralPitch;
     float mNeutralYaw;
     float mNeutralRoll;

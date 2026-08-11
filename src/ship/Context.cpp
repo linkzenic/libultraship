@@ -36,6 +36,14 @@ Context* Context::GetRawInstance() {
     return mContext.get();
 }
 
+#ifdef __ANDROID__
+static std::string sAndroidDataRootPath = "/storage/emulated/0/2S2H";
+
+static std::string GetAndroidDataRootPath() {
+    return sAndroidDataRootPath;
+}
+#endif
+
 void Context::DestroyInstance() {
     mContext = nullptr;
 }
@@ -473,12 +481,17 @@ std::string Context::GetShortName() const {
     return mShortName;
 }
 
+#if defined(__ANDROID__)
+void Context::SetAndroidDataRootPath(const std::string& path) {
+    if (!path.empty()) {
+        sAndroidDataRootPath = path;
+    }
+}
+#endif
+
 std::string Context::GetAppBundlePath() {
 #if defined(__ANDROID__)
-    const char* externaldir = SDL_AndroidGetExternalStoragePath();
-    if (externaldir != NULL) {
-        return externaldir;
-    }
+    return GetAndroidDataRootPath();
 #endif
 
 #ifdef __IOS__
@@ -538,10 +551,7 @@ std::string Context::GetAppBundlePath() {
 
 std::string Context::GetAppDirectoryPath(const std::string& appName) {
 #if defined(__ANDROID__)
-    const char* externaldir = SDL_AndroidGetExternalStoragePath();
-    if (externaldir != NULL) {
-        return externaldir;
-    }
+    return GetAndroidDataRootPath();
 #endif
 
 #ifdef __IOS__

@@ -11,8 +11,12 @@ O2rArchive::O2rArchive(const std::string& archivePath) : Archive(archivePath) {
 }
 
 O2rArchive::~O2rArchive() {
-    SPDLOG_TRACE("destruct o2rarchive: {}", GetPath());
-    Close();
+    if (spdlog::default_logger() != nullptr) {
+        SPDLOG_TRACE("destruct o2rarchive: {}", GetPath());
+    }
+    if (mZipArchive != nullptr) {
+        Close();
+    }
 }
 
 zip_t* O2rArchive::GetZipHandle() {
