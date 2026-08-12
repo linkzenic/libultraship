@@ -10,7 +10,7 @@ extern "C" int TwoShipApple_GetNativeControllerGyro(float* gyroX, float* gyroY, 
 #endif
 
 namespace Ship {
-#if defined(__ANDROID__) || defined(__IOS__)
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
 static bool MobileDeviceHasGyroSensor() {
     if ((SDL_WasInit(SDL_INIT_SENSOR) & SDL_INIT_SENSOR) == 0) {
         SDL_InitSubSystem(SDL_INIT_SENSOR);
@@ -62,7 +62,7 @@ std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFrom
         portIndex == 0 &&
         TwoShipApple_GetNativeControllerGyro(&appleGyroData[0], &appleGyroData[1], &appleGyroData[2]);
 #endif
-#if defined(__ANDROID__) || defined(__IOS__)
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
     const bool mobileDeviceHasGyro = portIndex == 0 && MobileDeviceHasGyroSensor();
 #endif
 
@@ -74,7 +74,7 @@ std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFrom
 #if defined(__IOS__)
             && !appleControllerHasGyro
 #endif
-#if defined(__ANDROID__) || defined(__IOS__)
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
             && !mobileDeviceHasGyro
 #endif
         ) {
@@ -113,7 +113,7 @@ std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFrom
         }
     }
 
-#if defined(__IOS__)
+#if defined(__IOS__) && !defined(__TVOS__)
     if (mapping == nullptr && (appleControllerHasGyro || mobileDeviceHasGyro)) {
         mapping = std::make_shared<SDLGyroMapping>(portIndex, 1.0f, 0.0f, 0.0f, 0.0f);
         mapping->Recalibrate();

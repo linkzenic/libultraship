@@ -12,7 +12,7 @@ extern "C" int TwoShipApple_GetNativeControllerGyro(float* gyroX, float* gyroY, 
 #endif
 
 namespace Ship {
-#if defined(__ANDROID__) || defined(__IOS__)
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
 static SDL_Sensor* sMobileGyroSensor = nullptr;
 
 static bool OpenMobileGyroSensor() {
@@ -99,7 +99,7 @@ void SDLGyroMapping::Recalibrate() {
         return;
     }
 
-#if defined(__ANDROID__) || defined(__IOS__)
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
     float mobileGyroData[3];
     if (mPortIndex == 0 && GetMobileGyroData(mobileGyroData)) {
         mNeutralPitch = mobileGyroData[0];
@@ -150,7 +150,7 @@ void SDLGyroMapping::UpdatePad(float& x, float& y) {
         return;
     }
 
-#if defined(__ANDROID__) || defined(__IOS__)
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
     float mobileGyroData[3];
     if (mPortIndex == 0 && GetMobileGyroData(mobileGyroData)) {
         x = (mobileGyroData[0] - mNeutralPitch) * mSensitivity;
@@ -203,7 +203,7 @@ void SDLGyroMapping::EraseFromConfig() {
 }
 
 std::string SDLGyroMapping::GetPhysicalDeviceName() {
-#if defined(__IOS__)
+#if defined(__IOS__) && !defined(__TVOS__)
     return "iOS Motion";
 #else
     return "SDL Gamepad";

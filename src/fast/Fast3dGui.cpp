@@ -10,7 +10,7 @@
 #include "ship/window/gui/resource/GuiTextureFactory.h"
 #include "ship/resource/File.h"
 
-#if defined(__IOS__)
+#if defined(__IOS__) && !defined(__TVOS__)
 #include <unordered_set>
 #endif
 
@@ -74,7 +74,7 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
         case WindowBackend::FAST3D_SDL_OPENGL:
         case WindowBackend::FAST3D_SDL_METAL: {
             const SDL_Event* sdlEvent = static_cast<const SDL_Event*>(event.Sdl.Event);
-#if defined(__IOS__)
+#if defined(__IOS__) && !defined(__TVOS__)
             static std::unordered_set<SDL_FingerID> activeTouchFingers;
             static bool twoFingerScrolling = false;
             ImGuiIO& io = ImGui::GetIO();
@@ -93,7 +93,7 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
             }
 #endif
             ImGui_ImplSDL2_ProcessEvent(sdlEvent);
-#if defined(__IOS__)
+#if defined(__IOS__) && !defined(__TVOS__)
             if (!twoFingerScrolling && sdlEvent->type == SDL_MOUSEMOTION &&
                 sdlEvent->motion.which == SDL_TOUCH_MOUSEID &&
                 (sdlEvent->motion.state & SDL_BUTTON_LMASK) != 0 && !ImGui::IsAnyItemActive()) {

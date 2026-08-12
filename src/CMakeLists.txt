@@ -180,6 +180,9 @@ if (CMAKE_SYSTEM_NAME MATCHES "iOS|tvOS")
         SPDLOG_ACTIVE_LEVEL=${SPDLOG_MIN_CUTOFF}
         __IOS__
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "tvOS")
+        target_compile_definitions(libultraship PRIVATE __TVOS__)
+    endif()
 
     set_xcode_property(${PROJECT_NAME} PRODUCT_BUNDLE_IDENTIFIER ${BUNDLE_ID} All)
 
