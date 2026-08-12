@@ -10,6 +10,10 @@
 #include "ship/window/gui/resource/GuiTextureFactory.h"
 #include "ship/resource/File.h"
 
+#if defined(__IOS__)
+#include <unordered_set>
+#endif
+
 #ifdef __APPLE__
 #include <SDL_hints.h>
 #include <SDL_video.h>
@@ -68,12 +72,45 @@ bool Fast3dGui::SupportsViewports() {
 void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
     switch (mImpl.Backend) {
         case WindowBackend::FAST3D_SDL_OPENGL:
-        case WindowBackend::FAST3D_SDL_METAL:
-            ImGui_ImplSDL2_ProcessEvent(static_cast<const SDL_Event*>(event.Sdl.Event));
+        case WindowBackend::FAST3D_SDL_METAL: {
+            const SDL_Event* sdlEvent = static_cast<const SDL_Event*>(event.Sdl.Event);
+#if defined(__IOS__)
+            static std::unordered_set<SDL_FingerID> activeTouchFingers;
+            static bool twoFingerScrolling = false;
+            ImGuiIO& io = ImGui::GetIO();
+
+            if (sdlEvent->type == SDL_FINGERDOWN) {
+                activeTouchFingers.insert(sdlEvent->tfinger.fingerId);
+                if (activeTouchFingers.size() >= 2) {
+                    twoFingerScrolling = true;
+                    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+                }
+            } else if (sdlEvent->type == SDL_FINGERUP) {
+                activeTouchFingers.erase(sdlEvent->tfinger.fingerId);
+                if (activeTouchFingers.size() < 2) {
+                    twoFingerScrolling = false;
+                }
+            }
+#endif
+            ImGui_ImplSDL2_ProcessEvent(sdlEvent);
+#if defined(__IOS__)
+            if (!twoFingerScrolling && sdlEvent->type == SDL_MOUSEMOTION &&
+                sdlEvent->motion.which == SDL_TOUCH_MOUSEID &&
+                (sdlEvent->motion.state & SDL_BUTTON_LMASK) != 0 && !ImGui::IsAnyItemActive()) {
+                io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+                io.AddMouseWheelEvent(0.0f, sdlEvent->motion.yrel / 24.0f);
+            }
+            if (twoFingerScrolling && sdlEvent->type == SDL_FINGERMOTION) {
+                io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+                const float dragPixels = sdlEvent->tfinger.dy * io.DisplaySize.y;
+                io.AddMouseWheelEvent(0.0f, dragPixels / 24.0f);
+            }
+#endif
 #if defined(__ANDROID__) || defined(__IOS__)
             Ship::Mobile::ImGuiProcessEvent(ImGui::GetIO().WantTextInput);
 #endif
             break;
+        }
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
             ImGui_ImplWin32_WndProcHandler(static_cast<HWND>(event.Win32.Handle), event.Win32.Msg, event.Win32.Param1,
@@ -226,6 +263,14 @@ void Fast3dGui::ImGuiWMNewFrame() {
         case WindowBackend::FAST3D_SDL_OPENGL:
         case WindowBackend::FAST3D_SDL_METAL:
             ImGui_ImplSDL2_NewFrame();
+#if defined(__IOS__)
+            if (mImpl.Backend == WindowBackend::FAST3D_SDL_METAL) {
+                GfxRenderingAPIMetal* api =
+                    static_cast<GfxRenderingAPIMetal*>(mInterpreter.lock()->GetCurrentRenderingAPI());
+                api->GetDrawableScale(&ImGui::GetIO().DisplayFramebufferScale.x,
+                                      &ImGui::GetIO().DisplayFramebufferScale.y);
+            }
+#endif
             break;
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
@@ -320,8 +365,14 @@ void Fast3dGui::CalculateGameViewport() {
     mainPos.y -= mTemporaryWindowPos.y;
     ImVec2 size = ImGui::GetContentRegionAvail();
     const auto interpreter = mInterpreter.lock().get();
-    interpreter->mCurDimensions.width = (uint32_t)(size.x * mInterpreter.lock()->mCurDimensions.internal_mul);
-    interpreter->mCurDimensions.height = (uint32_t)(size.y * mInterpreter.lock()->mCurDimensions.internal_mul);
+    ImVec2 renderScale(1.0f, 1.0f);
+#if defined(__IOS__)
+    renderScale = ImGui::GetIO().DisplayFramebufferScale;
+#endif
+    interpreter->mCurDimensions.width =
+        (uint32_t)(size.x * renderScale.x * mInterpreter.lock()->mCurDimensions.internal_mul);
+    interpreter->mCurDimensions.height =
+        (uint32_t)(size.y * renderScale.y * mInterpreter.lock()->mCurDimensions.internal_mul);
     interpreter->mGameWindowViewport.x = (int16_t)mainPos.x;
     interpreter->mGameWindowViewport.y = (int16_t)mainPos.y;
     interpreter->mGameWindowViewport.width = (int16_t)size.x;

@@ -183,7 +183,7 @@ if(NOT TARGET libtcc)
             message(WARNING "TinyCC configuration script returned non-zero. The build might fail.")
         endif()
 
-        if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        if(CMAKE_SYSTEM_NAME MATCHES "iOS|tvOS")
             message(STATUS "iOS target detected: Disabling CONFIG_CODESIGN...")
             file(APPEND "${tinycc_SOURCE_DIR}/config.h" "\n/* Force disable code signing for iOS cross-compilation */\n#undef CONFIG_CODESIGN\n")
         endif()
