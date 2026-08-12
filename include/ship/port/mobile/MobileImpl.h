@@ -19,6 +19,7 @@ class Mobile {
     static float GetCameraPitch();
 #ifdef __ANDROID__
     static bool ConsumeGamepadBackPress();
+    static void SetCrashContext(const char* context);
 #endif
 };
 }; // namespace Ship

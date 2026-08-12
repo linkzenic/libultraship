@@ -38,6 +38,8 @@ void Ship::Mobile::ImGuiProcessEvent(bool wantsTextInput) {
 #include <cstdint>
 #include <cstring>
 #include <fcntl.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <ucontext.h>
 #include <unistd.h>
 
@@ -45,9 +47,11 @@ namespace {
 
 constexpr size_t CRASH_REPORT_PATH_SIZE = 4096;
 constexpr size_t CRASH_VERSION_SIZE = 128;
+constexpr size_t CRASH_CONTEXT_SIZE = 2048;
 
 char sCrashReportPath[CRASH_REPORT_PATH_SIZE] = {};
 char sCrashVersion[CRASH_VERSION_SIZE] = {};
+char sCrashContext[CRASH_CONTEXT_SIZE] = {};
 volatile sig_atomic_t sHandlingCrash = 0;
 
 void WriteAll(int fd, const char* text, size_t length) {
@@ -148,6 +152,17 @@ void HandleNativeCrash(int signal, siginfo_t* info, void* context) {
         WriteText(fd, "Report type: Native signal\n");
         WriteText(fd, "App version: ");
         WriteText(fd, sCrashVersion);
+        WriteText(fd, "\nThread ID: ");
+        WriteUnsigned(fd, static_cast<unsigned>(syscall(SYS_gettid)), 10);
+        char threadName[17] = {};
+        if (prctl(PR_GET_NAME, threadName, 0, 0, 0) == 0) {
+            WriteText(fd, "\nThread name: ");
+            WriteText(fd, threadName);
+        }
+        if (sCrashContext[0] != '\0') {
+            WriteText(fd, "\nLast diagnostic: ");
+            WriteText(fd, sCrashContext);
+        }
         WriteText(fd, "\nSignal: ");
         WriteText(fd, SignalName(signal));
         WriteText(fd, " (");
@@ -165,6 +180,14 @@ void HandleNativeCrash(int signal, siginfo_t* info, void* context) {
             WriteField(fd, "Program counter: ", machineContext->pc, true);
             WriteField(fd, "Stack pointer: ", machineContext->sp, true);
             WriteField(fd, "Link register: ", machineContext->regs[30], true);
+            WriteText(fd, "Registers:\n");
+            for (size_t i = 0; i < 31; i++) {
+                WriteText(fd, "  X");
+                WriteUnsigned(fd, i, 10);
+                WriteText(fd, ": 0x");
+                WriteUnsigned(fd, machineContext->regs[i], 16);
+                WriteText(fd, "\n");
+            }
         }
 #endif
 
@@ -224,6 +247,15 @@ extern "C" void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeGamepadBackPr
 
 bool Ship::Mobile::ConsumeGamepadBackPress() {
     return sGamepadBackPressed.exchange(false);
+}
+
+void Ship::Mobile::SetCrashContext(const char* context) {
+    if (context == nullptr) {
+        sCrashContext[0] = '\0';
+        return;
+    }
+    std::strncpy(sCrashContext, context, sizeof(sCrashContext) - 1);
+    sCrashContext[sizeof(sCrashContext) - 1] = '\0';
 }
 
 void Ship::Mobile::Init() {

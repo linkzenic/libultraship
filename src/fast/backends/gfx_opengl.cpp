@@ -27,6 +27,9 @@
 #include "ship/resource/factory/ShaderFactory.h"
 #include "fast/interpreter.h"
 #include "ship/config/ConsoleVariable.h"
+#ifdef __ANDROID__
+#include "ship/port/mobile/MobileImpl.h"
+#endif
 
 namespace Fast {
 int GfxRenderingAPIOGL::GetMaxTextureSize() {
@@ -321,6 +324,9 @@ std::string GfxRenderingAPIOGL::BuildFsShader(const CCFeatures& cc_features) {
 
     if (res == nullptr) {
         SPDLOG_ERROR("Failed to load default fragment shader, missing f3d.o2r?");
+#ifdef __ANDROID__
+        Ship::Mobile::SetCrashContext("OpenGL startup: default fragment shader resource was not found");
+#endif
         abort();
     }
 
@@ -387,6 +393,9 @@ static std::string BuildVsShader(const CCFeatures& cc_features) {
 
     if (res == nullptr) {
         SPDLOG_ERROR("Failed to load default vertex shader, missing f3d.o2r?");
+#ifdef __ANDROID__
+        Ship::Mobile::SetCrashContext("OpenGL startup: default vertex shader resource was not found");
+#endif
         abort();
     }
 
@@ -418,12 +427,15 @@ ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, u
     glCompileShader(vertex_shader);
     glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &success);
     if (!success) {
-        GLint max_length = 0;
-        glGetShaderiv(vertex_shader, GL_INFO_LOG_LENGTH, &max_length);
-        char error_log[1024];
-        // fprintf(stderr, "Vertex shader compilation failed\n");
-        glGetShaderInfoLog(vertex_shader, max_length, &max_length, &error_log[0]);
-        // fprintf(stderr, "%s\n", &error_log[0]);
+        GLsizei log_length = 0;
+        char error_log[1024] = {};
+        glGetShaderInfoLog(vertex_shader, sizeof(error_log) - 1, &log_length, error_log);
+        fprintf(stderr, "Vertex shader compilation failed\n%s\n", &error_log[0]);
+#ifdef __ANDROID__
+        std::string diagnostic = "OpenGL vertex shader compilation failed: ";
+        diagnostic += error_log;
+        Ship::Mobile::SetCrashContext(diagnostic.c_str());
+#endif
         abort();
     }
 
@@ -432,12 +444,16 @@ ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, u
     glCompileShader(fragment_shader);
     glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &success);
     if (!success) {
-        GLint max_length = 0;
-        glGetShaderiv(fragment_shader, GL_INFO_LOG_LENGTH, &max_length);
-        char error_log[1024];
+        GLsizei log_length = 0;
+        char error_log[1024] = {};
         fprintf(stderr, "Fragment shader compilation failed\n");
-        glGetShaderInfoLog(fragment_shader, max_length, &max_length, &error_log[0]);
+        glGetShaderInfoLog(fragment_shader, sizeof(error_log) - 1, &log_length, error_log);
         fprintf(stderr, "%s\n", &error_log[0]);
+#ifdef __ANDROID__
+        std::string diagnostic = "OpenGL fragment shader compilation failed: ";
+        diagnostic += error_log;
+        Ship::Mobile::SetCrashContext(diagnostic.c_str());
+#endif
         abort();
     }
 
