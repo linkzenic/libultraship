@@ -95,6 +95,9 @@ class Context {
      * @return Absolute path string, or an empty string on platforms without the concept of a bundle.
      */
     static std::string GetAppBundlePath();
+#if defined(__ANDROID__)
+    static void SetAndroidDataRootPath(const std::string& path);
+#endif
 
     /**
      * @brief Returns the platform-specific directory where the application stores its data.

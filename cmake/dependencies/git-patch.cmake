@@ -2,7 +2,7 @@
 
 function(patch)
     execute_process(
-        COMMAND git apply ${patch_file}
+        COMMAND git apply --ignore-whitespace ${patch_file}
         RESULT_VARIABLE ret
         ERROR_QUIET
     )
@@ -11,7 +11,7 @@ endfunction()
 
 function(check_patch)
     execute_process(
-        COMMAND git apply --reverse --check ${patch_file}
+        COMMAND git apply --ignore-whitespace --reverse --check ${patch_file}
         RESULT_VARIABLE ret
         ERROR_QUIET
     )

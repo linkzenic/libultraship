@@ -5,6 +5,11 @@
 #include "ship/Context.h"
 #include "ship/controller/controldeck/ControlDeck.h"
 
+#ifdef __ANDROID__
+#include <SDL2/SDL.h>
+#include <jni.h>
+#endif
+
 namespace Ship {
 SDLRumbleMapping::SDLRumbleMapping(uint8_t portIndex, uint8_t lowFrequencyIntensityPercentage,
                                    uint8_t highFrequencyIntensityPercentage)
@@ -15,21 +20,49 @@ SDLRumbleMapping::SDLRumbleMapping(uint8_t portIndex, uint8_t lowFrequencyIntens
 }
 
 void SDLRumbleMapping::StartRumble() {
-    for (const auto& [instanceId, gamepad] : Context::GetRawInstance()
-                                                 ->GetControlDeck()
-                                                 ->GetConnectedPhysicalDeviceManager()
-                                                 ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
+#ifdef __ANDROID__
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    jobject activity = (jobject)SDL_AndroidGetActivity();
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID m = env->GetMethodID(cls, "startRumble", "(II)V");
+    if (m == nullptr) {
+        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+        return;
+    }
+    env->CallVoidMethod(activity, m, (jint)mLowFrequencyIntensityPercentage, (jint)mHighFrequencyIntensityPercentage);
+    env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(activity);
+#else
+    for (const auto& [instanceId, gamepad] :
+         Context::GetRawInstance()->GetControlDeck()->GetConnectedPhysicalDeviceManager()->GetConnectedSDLGamepadsForPort(
+             mPortIndex)) {
         SDL_GameControllerRumble(gamepad, mLowFrequencyIntensity, mHighFrequencyIntensity, 0);
     }
+#endif
 }
 
 void SDLRumbleMapping::StopRumble() {
-    for (const auto& [instanceId, gamepad] : Context::GetRawInstance()
-                                                 ->GetControlDeck()
-                                                 ->GetConnectedPhysicalDeviceManager()
-                                                 ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
+#ifdef __ANDROID__
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    jobject activity = (jobject)SDL_AndroidGetActivity();
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID m = env->GetMethodID(cls, "stopRumble", "()V");
+    if (m == nullptr) {
+        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+        return;
+    }
+    env->CallVoidMethod(activity, m);
+    env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(activity);
+#else
+    for (const auto& [instanceId, gamepad] :
+         Context::GetRawInstance()->GetControlDeck()->GetConnectedPhysicalDeviceManager()->GetConnectedSDLGamepadsForPort(
+             mPortIndex)) {
         SDL_GameControllerRumble(gamepad, 0, 0, 0);
     }
+#endif
 }
 
 void SDLRumbleMapping::SetLowFrequencyIntensity(uint8_t intensityPercentage) {

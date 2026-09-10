@@ -17,6 +17,24 @@
 #include <stack>
 #include "fast/resource/type/Light.h"
 
+// Android arm64 may tag heap pointers in their top byte. Ignore that tag only
+// for address-range classification; retain the original pointer for all reads
+// so tagged-memory access semantics and resource-cache identity stay intact.
+static constexpr uintptr_t gfx_address_for_range_check(uintptr_t address) {
+#if defined(__ANDROID__) && defined(__aarch64__)
+    return address & UINT64_C(0x00FFFFFFFFFFFFFF);
+#else
+    return address;
+#endif
+}
+
+#if defined(__ANDROID__) && defined(__aarch64__)
+static_assert(gfx_address_for_range_check(UINT64_C(0xB400007123456780)) == UINT64_C(0x0000007123456780));
+static_assert(gfx_address_for_range_check(UINT64_C(0x0000007123456780)) == UINT64_C(0x0000007123456780));
+static_assert(gfx_address_for_range_check(UINT64_C(0xFFFFFFFFFFFFFFFF)) > UINT64_C(0x0000FFFFFFFFFFFF));
+static_assert(gfx_address_for_range_check(UINT64_C(0xB400000000000000)) < 0x10000);
+#endif
+
 #ifndef _LANGUAGE_C
 #define _LANGUAGE_C
 #endif
@@ -642,6 +660,21 @@ void Interpreter::ImportTextureRgba32(int tile, bool importReplacement) {
 
     if (addr == nullptr) {
         SPDLOG_ERROR("ImportTextureRgba32: null texture address for tile {}", tile);
+        return;
+    }
+
+    // Custom inventory icons are complete RGBA32 images rendered on a logical
+    // 32x32 quad. Do not clip their HD pixel buffer to that logical tile size.
+    // Restrict this to whole-resource loads; subtiles and other textures retain
+    // the normal TMEM/stride handling below.
+    if (!importReplacement && metadata->resource != nullptr &&
+        metadata->resource->GetInitData()->Path.find("textures/icon_item_custom/") != std::string::npos &&
+        metadata->resource->Type == Fast::TextureType::RGBA32bpp &&
+        addr == metadata->resource->ImageData && metadata->width > 32 && metadata->height > 32 &&
+        metadata->resource->ImageDataSize >= static_cast<uint64_t>(metadata->width) * metadata->height * 4 &&
+        GetTileSizeFromCoordinates(mRdp->texture_tile[tile].uls, mRdp->texture_tile[tile].lrs) == 32 &&
+        GetTileSizeFromCoordinates(mRdp->texture_tile[tile].ult, mRdp->texture_tile[tile].lrt) == 32) {
+        mRapi->UploadTexture(addr, metadata->width, metadata->height);
         return;
     }
 
@@ -2615,7 +2648,16 @@ void Interpreter::GfxDpLoadBlock(uint8_t tile, uint32_t uls, uint32_t ult, uint3
 }
 
 void Interpreter::GfxDpLoadTile(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t lrs, uint32_t lrt) {
-    SUPPORT_CHECK(tile == G_TX_LOADTILE);
+    // G_TX_LOADTILE (7) is a convention used by the SDK macros, not the only
+    // valid descriptor. Model materials can load through another tile. All
+    // state below is already selected through that descriptor's TMEM index.
+    // Reject malformed commands before indexing state or computing unsigned
+    // rectangle sizes, while preserving the requested tile for valid loads.
+    if (tile >= 8 || lrs < uls || lrt < ult || mRdp->texture_to_load.addr == nullptr) {
+        SPDLOG_ERROR("GfxDpLoadTile: invalid load tile={}, rect=({}, {})-({}, {}), source={}",
+                     tile, uls, ult, lrs, lrt, static_cast<const void*>(mRdp->texture_to_load.addr));
+        return;
+    }
 
     uint32_t word_size_shift = 0;
     switch (mRdp->texture_to_load.siz) {
@@ -4857,7 +4899,7 @@ static void gfx_step() {
         // Guard against null or N64-segment addresses that would crash in strlen/strncmp.
         if (opcode == OTR_G_VTX_OTR_FILEPATH || opcode == OTR_G_SETTIMG_OTR_FILEPATH ||
             opcode == OTR_G_DL_OTR_FILEPATH || opcode == OTR_G_PUSHCD || opcode == OTR_G_MTX_OTR_FILEPATH) {
-            uintptr_t w1 = (uintptr_t)cmd->words.w1;
+            uintptr_t w1 = gfx_address_for_range_check((uintptr_t)cmd->words.w1);
             if (w1 < 0x10000
 #if UINTPTR_MAX > 0xFFFFFFFFu
                 // On 64-bit: filter kernel/sentinel addresses.
@@ -5290,7 +5332,7 @@ void gfx_push_current_dir(char* path) {
 }
 
 int32_t gfx_check_image_signature(const char* imgData) {
-    uintptr_t i = (uintptr_t)(imgData);
+    uintptr_t i = gfx_address_for_range_check((uintptr_t)imgData);
 
     if ((i & 1) == 1) {
         return 0;
@@ -5302,8 +5344,7 @@ int32_t gfx_check_image_signature(const char* imgData) {
         return 0;
     }
 #if UINTPTR_MAX > 0xFFFFFFFFu
-    // On 64-bit: filter kernel/sentinel addresses. Upper bound covers all
-    // user-space layouts (x86_64 47-bit canonical, ARM64 48-bit VA, etc.).
+    // On 64-bit: filter kernel/sentinel addresses after Android tag handling.
     if (i > 0x0000FFFFFFFFFFFFull) {
         return 0;
     }

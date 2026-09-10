@@ -1,6 +1,8 @@
 name: build-validation
 on:
   push:
+    branches-ignore:
+      - nei-2-release-compat
   pull_request:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
