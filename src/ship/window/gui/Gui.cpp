@@ -719,6 +719,16 @@ void Gui::HandleMouseCapture() {
 
 void Gui::StartFrame() {
     HandleMouseCapture();
+#if defined(__TVOS__)
+    // tvOS is controller-first. Keep ImGui gamepad navigation enabled whenever
+    // the tvOS controller-navigation setting is enabled, including transfer
+    // and other modal popups shown before the main SoH menu.
+    if (Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0)) {
+        mImGuiIo->ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    } else {
+        mImGuiIo->ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+    }
+#endif
 #if defined(__ANDROID__) || defined(__TVOS__)
     // On first launch FOCUS_GAINED never fires so gamepads list stays empty.
     // SetGamepadMode sets WantUpdateGamepadsList without touching the event queue.
