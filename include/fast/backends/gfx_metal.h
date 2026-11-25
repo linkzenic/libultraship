@@ -178,6 +178,7 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     void SetupFloatingFrame();
     void RenderDrawData(ImDrawData* drawData);
     bool MetalInit(SDL_Renderer* renderer);
+    void GetDrawableScale(float* scaleX, float* scaleY);
 
   private:
     bool NonUniformThreadGroupSupported();

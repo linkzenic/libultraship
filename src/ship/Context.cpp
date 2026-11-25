@@ -494,11 +494,6 @@ std::string Context::GetAppBundlePath() {
     return GetAndroidDataRootPath();
 #endif
 
-#ifdef __IOS__
-    const char* home = getenv("HOME");
-    return std::string(home) + "/Documents";
-#endif
-
 #ifdef NON_PORTABLE
     return CMAKE_INSTALL_PREFIX;
 #else
@@ -554,7 +549,10 @@ std::string Context::GetAppDirectoryPath(const std::string& appName) {
     return GetAndroidDataRootPath();
 #endif
 
-#ifdef __IOS__
+#if defined(__TVOS__)
+    const char* home = getenv("HOME");
+    return std::string(home) + "/Library/Caches/2Ship 2 Harkinian";
+#elif defined(__IOS__)
     const char* home = getenv("HOME");
     return std::string(home) + "/Documents";
 #endif

@@ -5,19 +5,21 @@
 #include "ship/Context.h"
 #include "ship/controller/controldeck/ControlDeck.h"
 
+#if defined(__IOS__)
+extern "C" int TwoShipApple_GetNativeControllerGyro(float* gyroX, float* gyroY, float* gyroZ);
+#endif
+
 namespace Ship {
-#ifdef __ANDROID__
-static bool AndroidDeviceHasGyroSensor() {
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
+static bool MobileDeviceHasGyroSensor() {
     if ((SDL_WasInit(SDL_INIT_SENSOR) & SDL_INIT_SENSOR) == 0) {
         SDL_InitSubSystem(SDL_INIT_SENSOR);
     }
-
     for (int32_t i = 0; i < SDL_NumSensors(); i++) {
         if (SDL_SensorGetDeviceType(i) == SDL_SENSOR_GYRO) {
             return true;
         }
     }
-
     return false;
 }
 #endif
@@ -54,23 +56,34 @@ std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFrom
 std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFromSDLInput(uint8_t portIndex) {
     std::shared_ptr<ControllerGyroMapping> mapping = nullptr;
 
+#if defined(__IOS__)
+    float appleGyroData[3] = {};
+    const bool appleControllerHasGyro =
+        portIndex == 0 &&
+        TwoShipApple_GetNativeControllerGyro(&appleGyroData[0], &appleGyroData[1], &appleGyroData[2]);
+#endif
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
 #ifdef __ANDROID__
-    const bool androidDeviceHasGyro = AndroidDeviceHasGyroSensor();
+    const bool mobileDeviceHasGyro = MobileDeviceHasGyroSensor();
+#else
+    const bool mobileDeviceHasGyro = portIndex == 0 && MobileDeviceHasGyroSensor();
+#endif
 #endif
 
     for (auto [instanceId, gamepad] : Context::GetRawInstance()
                                           ->GetControlDeck()
                                           ->GetConnectedPhysicalDeviceManager()
                                           ->GetConnectedSDLGamepadsForPort(portIndex)) {
-#ifdef __ANDROID__
-        if (!SDL_GameControllerHasSensor(gamepad, SDL_SENSOR_GYRO) && !androidDeviceHasGyro) {
-            continue;
-        }
-#else
-        if (!SDL_GameControllerHasSensor(gamepad, SDL_SENSOR_GYRO)) {
-            continue;
-        }
+        if (!SDL_GameControllerHasSensor(gamepad, SDL_SENSOR_GYRO)
+#if defined(__IOS__)
+            && !appleControllerHasGyro
 #endif
+#if defined(__ANDROID__) || (defined(__IOS__) && !defined(__TVOS__))
+            && !mobileDeviceHasGyro
+#endif
+        ) {
+            continue;
+        }
 
         for (int32_t button = SDL_CONTROLLER_BUTTON_A; button < SDL_CONTROLLER_BUTTON_MAX; button++) {
             if (SDL_GameControllerGetButton(gamepad, static_cast<SDL_GameControllerButton>(button))) {
@@ -103,6 +116,13 @@ std::shared_ptr<ControllerGyroMapping> GyroMappingFactory::CreateGyroMappingFrom
             break;
         }
     }
+
+#if defined(__IOS__) && !defined(__TVOS__)
+    if (mapping == nullptr && (appleControllerHasGyro || mobileDeviceHasGyro)) {
+        mapping = std::make_shared<SDLGyroMapping>(portIndex, 1.0f, 0.0f, 0.0f, 0.0f);
+        mapping->Recalibrate();
+    }
+#endif
 
     return mapping;
 }

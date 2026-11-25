@@ -94,6 +94,20 @@ bool GfxRenderingAPIMetal::MetalInit(SDL_Renderer* renderer) {
     return ImGui_ImplMetal_Init(mDevice);
 }
 
+void GfxRenderingAPIMetal::GetDrawableScale(float* scaleX, float* scaleY) {
+    int logicalWidth = 0;
+    int logicalHeight = 0;
+    int drawableWidth = 0;
+    int drawableHeight = 0;
+    SDL_Window* window = SDL_RenderGetWindow(mRenderer);
+    if (window != nullptr) {
+        SDL_GetWindowSize(window, &logicalWidth, &logicalHeight);
+    }
+    SDL_GetRendererOutputSize(mRenderer, &drawableWidth, &drawableHeight);
+    *scaleX = logicalWidth > 0 ? static_cast<float>(drawableWidth) / logicalWidth : 1.0f;
+    *scaleY = logicalHeight > 0 ? static_cast<float>(drawableHeight) / logicalHeight : 1.0f;
+}
+
 static void SetupScreenFramebuffer(uint32_t width, uint32_t height);
 
 void GfxRenderingAPIMetal::NewFrame() {
@@ -691,6 +705,11 @@ int GfxRenderingAPIMetal::CreateFramebuffer() {
 void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t height) {
     mCurrentDrawable = nullptr;
     mCurrentDrawable = mLayer->nextDrawable();
+
+    // The drawable is the source of truth on high-density displays. SDL can
+    // report the logical window size here while Metal provides native pixels.
+    width = static_cast<uint32_t>(mCurrentDrawable->texture()->width());
+    height = static_cast<uint32_t>(mCurrentDrawable->texture()->height());
 
     bool msaa_enabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMSAAValue", 1) > 1;
 
