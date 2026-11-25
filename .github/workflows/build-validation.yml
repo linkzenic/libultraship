@@ -5,6 +5,7 @@ on:
       - android/color-combiner-key-fix
       - android/rc3-diagnostics
       - android/adaptive-texture-budget
+      - apple-mobile-integration
   pull_request:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
