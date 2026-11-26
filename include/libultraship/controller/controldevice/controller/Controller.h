@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <cstdint>
+#include <optional>
 #include <queue>
 #include <vector>
 #include <map>
@@ -44,6 +45,11 @@ class Controller : public Ship::Controller {
      */
     void ReadToPad(void* pad) override;
 
+    // A value (including zero) replaces saved gamepad button mappings for this poll.
+    // Keyboard, mouse, sticks, and gyro continue to use their existing mappings.
+    using GamepadButtonOverride = std::optional<CONTROLLERBUTTONS_T> (*)();
+    void SetGamepadButtonOverride(GamepadButtonOverride buttonOverride) { mGamepadButtonOverride = buttonOverride; }
+
   private:
     /**
      * @brief Converts the current Ship input state into one OSContPad entry.
@@ -52,5 +58,6 @@ class Controller : public Ship::Controller {
     void ReadToOSContPad(OSContPad* pad);
 
     std::deque<OSContPad> mPadBuffer; ///< Rolling history of pad states (newest at front).
+    GamepadButtonOverride mGamepadButtonOverride = nullptr;
 };
 } // namespace LUS

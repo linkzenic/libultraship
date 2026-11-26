@@ -342,11 +342,25 @@ void GfxRenderingAPIMetal::ShaderGetInfo(struct ShaderProgram* prg, uint8_t* num
 }
 
 uint32_t GfxRenderingAPIMetal::NewTexture() {
+    if (!mFreeTextureIds.empty()) {
+        const auto id = mFreeTextureIds.back();
+        mFreeTextureIds.pop_back();
+        return id;
+    }
     mTextures.resize(mTextures.size() + 1);
     return (uint32_t)(mTextures.size() - 1);
 }
 
 void GfxRenderingAPIMetal::DeleteTexture(uint32_t texID) {
+#if defined(__TVOS__)
+    if (texID >= mTextures.size()) return;
+    auto& entry = mTextures[texID];
+    if (entry.texture) entry.texture->release();
+    if (entry.msaaTexture) entry.msaaTexture->release();
+    if (entry.sampler) entry.sampler->release();
+    entry = {};
+    mFreeTextureIds.push_back(texID);
+#endif
 }
 
 void GfxRenderingAPIMetal::SelectTexture(int tile, uint32_t texture_id) {

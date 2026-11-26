@@ -27,8 +27,10 @@ void Controller::ReadToOSContPad(OSContPad* pad) {
     OSContPad padToBuffer = { 0 };
 
     // Button Inputs
+    const auto gamepadButtons = mGamepadButtonOverride ? mGamepadButtonOverride() : std::nullopt;
+    padToBuffer.button = gamepadButtons.value_or(0);
     for (auto [bitmask, button] : mButtons) {
-        button->UpdatePad(padToBuffer.button);
+        button->UpdatePad(padToBuffer.button, !gamepadButtons.has_value());
     }
 
     // Stick Inputs

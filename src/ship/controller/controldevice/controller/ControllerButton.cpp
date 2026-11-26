@@ -134,8 +134,11 @@ void ControllerButton::ClearAllButtonMappingsForDeviceType(PhysicalDeviceType ph
     SaveButtonMappingIdsToConfig();
 }
 
-void ControllerButton::UpdatePad(CONTROLLERBUTTONS_T& padButtons) {
+void ControllerButton::UpdatePad(CONTROLLERBUTTONS_T& padButtons, bool includeGamepad) {
     for (const auto& [id, mapping] : mButtonMappings) {
+        if (!includeGamepad && mapping->GetPhysicalDeviceType() == PhysicalDeviceType::SDLGamepad) {
+            continue;
+        }
         mapping->UpdatePad(padButtons);
     }
 }

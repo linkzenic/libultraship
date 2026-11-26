@@ -16,6 +16,12 @@ constexpr uint64_t TextureBudgetBytes(uint64_t physicalBytes, int overrideMiB = 
     return physicalBytes == 0 ? 128 * MiB : std::clamp(physicalBytes / 32, 128 * MiB, 512 * MiB);
 }
 
+// Use process headroom rather than physical RAM on Apple TV.
+constexpr uint64_t TVOSTextureBudgetBytes(uint64_t headroomBytes) {
+    constexpr uint64_t MiB = 1024 * 1024;
+    return std::clamp(headroomBytes / 4, 32 * MiB, 128 * MiB);
+}
+
 constexpr uint64_t TextureStorageBytes(uint32_t width, uint32_t height) {
     return uint64_t(width) * height * 4;
 }

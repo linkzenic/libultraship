@@ -112,7 +112,7 @@ class ControllerButton {
      * @brief Evaluates all active mappings and sets the corresponding bits in @p padButtons.
      * @param padButtons Reference to the pad button bitfield to update.
      */
-    void UpdatePad(CONTROLLERBUTTONS_T& padButtons);
+    void UpdatePad(CONTROLLERBUTTONS_T& padButtons, bool includeGamepad = true);
 
     /**
      * @brief Forwards a keyboard event to all mappings that handle keyboard input.

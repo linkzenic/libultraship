@@ -196,6 +196,7 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
         mShaderProgramPool;
 
     std::vector<struct TextureDataMetal> mTextures;
+    std::vector<uint32_t> mFreeTextureIds;
     std::vector<FramebufferMetal> mFramebuffers;
     FrameUniforms mFrameUniforms;
     CoordUniforms mCoordUniforms;

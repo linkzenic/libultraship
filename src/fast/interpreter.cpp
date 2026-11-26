@@ -46,6 +46,9 @@
 #ifdef __ANDROID__
 #include <sys/sysinfo.h>
 #include "ship/port/mobile/MobileImpl.h"
+#elif defined(__TVOS__)
+#include <mach/mach.h>
+#include <os/proc.h>
 #endif
 
 #ifdef _WIN32
@@ -5068,6 +5071,9 @@ void Interpreter::Init(class GfxWindowBackend* wapi, class GfxRenderingAPI* rapi
     SPDLOG_INFO("GPU texture budget: {} MiB (override: {}), maximum {} entries",
                 mTextureBudgetBytes == UINT64_MAX ? -1 : int64_t(mTextureBudgetBytes / (1024 * 1024)),
                 overrideMiB, TEXTURE_CACHE_MAX_SIZE);
+#elif defined(__TVOS__)
+    mTextureBudgetBytes = TVOSTextureBudgetBytes(os_proc_available_memory());
+    SPDLOG_INFO("Apple TV GPU texture budget: {} MiB", mTextureBudgetBytes / (1024 * 1024));
 #endif
 
     // Pre-allocate texture cache buckets to prevent rehash-induced iterator invalidation.
@@ -5294,7 +5300,10 @@ void Interpreter::UploadCachedTexture(const uint8_t* pixels, uint32_t width, uin
 }
 
 void Interpreter::TrimTextureCache() {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__TVOS__)
+#if defined(__TVOS__)
+    if (mTextureFrame % 30 == 0) mTextureBudgetBytes = TVOSTextureBudgetBytes(os_proc_available_memory());
+#endif
     uint64_t used = 0;
     for (const auto& [key, texture] : mTextureCache.map) {
         used += texture.storage_bytes;
@@ -5307,7 +5316,13 @@ void Interpreter::TrimTextureCache() {
         auto texture = lru->it;
         const bool bound = std::find(std::begin(mRenderingState.mTextures), std::end(mRenderingState.mTextures),
                                      &*texture) != std::end(mRenderingState.mTextures);
+#if defined(__TVOS__)
+        // Retire cold textures sooner under pressure, never those used this frame.
+        const uint64_t minimumAge = mTextureBudgetBytes <= 48 * 1024 * 1024 ? 2 : 60;
+        if (bound || mTextureFrame - texture->second.last_used_frame < minimumAge) {
+#else
         if (!TextureCanBeEvicted(texture->second.last_used_frame, mTextureFrame, bound)) {
+#endif
             ++lru;
             continue;
         }
@@ -5326,6 +5341,25 @@ void Interpreter::TrimTextureCache() {
         mRapi->DeleteTexture(id);
     }
     mTextureCache.free_texture_ids.clear();
+#if defined(__TVOS__)
+    static const bool logMemory = getenv("TWO_SHIP_MEMORY_TEST") != nullptr;
+    if (logMemory) {
+        using Clock = std::chrono::steady_clock;
+        static auto nextSample = Clock::time_point{};
+        const auto now = Clock::now();
+        if (now >= nextSample) {
+            nextSample = now + std::chrono::seconds(15);
+            task_vm_info_data_t info{};
+            mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+            if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+                constexpr uint64_t MiB = 1024 * 1024;
+                SPDLOG_INFO("TV memory: footprint {} MiB; available {} MiB; GPU cache {}/{} MiB ({} entries, {} evictions)",
+                            info.phys_footprint / MiB, os_proc_available_memory() / MiB, used / MiB,
+                            mTextureBudgetBytes / MiB, mTextureCache.map.size(), mTextureEvictions);
+            }
+        }
+    }
+#endif
 #ifdef TWO_SHIP_PERFORMANCE_TEST
     using Clock = std::chrono::steady_clock;
     static auto previous = Clock::now();
